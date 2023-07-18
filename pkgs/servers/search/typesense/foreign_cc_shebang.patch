@@ -1,0 +1,13 @@
+--- foreign_cc/private/framework/toolchains/linux_commands.bzl
++++ foreign_cc/private/framework/toolchains/linux_commands.bzl
+@@ -2,9 +2,9 @@
+
+ load(":commands.bzl", "FunctionAndCallInfo")
+
+ def shebang():
+-    return "#!/usr/bin/env bash"
++    return "#!@bash@\nexport PATH=\"$PATH:${CMAKE_PREFIX_PATH//://bin:}\""
+
+ def script_extension():
+     return ".sh"
+

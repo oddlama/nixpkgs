@@ -1,0 +1,18 @@
+diff --git a/WORKSPACE b/WORKSPACE
+index 02096e28..fa361beb 100644
+--- a/WORKSPACE
++++ b/WORKSPACE
+@@ -28,8 +31,11 @@ load("@rules_foreign_cc//foreign_cc:repositories.bzl", "rules_foreign_cc_depende
+ # This sets up some common toolchains for building targets. For more details, please see
+ # https://bazelbuild.github.io/rules_foreign_cc/0.9.0/flatten.html#rules_foreign_cc_dependencies
+ rules_foreign_cc_dependencies(
+-    cmake_version="3.25.0",
+-    ninja_version="1.11.1")
++    # NIX: never built from source in here, use the toolchains provided by nix
++    register_built_tools = False,
++    register_default_tools = False,
++    register_preinstalled_tools = True,
++)
+
+ # brpc and its dependencies
+ git_repository(
