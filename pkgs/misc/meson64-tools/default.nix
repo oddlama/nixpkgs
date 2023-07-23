@@ -15,7 +15,7 @@ stdenv.mkDerivation rec {
     hash = "sha256-/koIsslDNpaFHf1TV/0Xt0TiyhjL6tCz2oHQraYNhPA=";
   };
 
-  nativeBuildInputs = with buildPackages; [ openssl bison yacc flex bc python3 ];
+  nativeBuildInputs = with buildPackages; [ openssl bison flex bc python3 ];
 
   preBuild = ''
     patchShebangs --build .
@@ -29,7 +29,7 @@ stdenv.mkDerivation rec {
   postInstall = ''
     (cd $out/bin
       for bin in *; do
-        ln -s $bin meson64-$bin
+        ln -s $bin meson64-g12-$bin
       done
     )
   '';
@@ -38,7 +38,7 @@ stdenv.mkDerivation rec {
 
   meta = with lib; {
     homepage = "https://github.com/angerman/meson64-tools";
-    description = "Tools for Amlogic Meson ARM64 platforms";
+    description = "Tools for Amlogic G12 platforms";
     license = licenses.mit;
     maintainers = with maintainers; [ oddlama ];
   };
