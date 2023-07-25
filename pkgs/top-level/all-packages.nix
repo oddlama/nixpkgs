@@ -5782,6 +5782,7 @@ with pkgs;
         } ../development/tools/build-managers/meson/emulator-hook.sh
     else throw "mesonEmulatorHook has to be in a conditional to check if the target binaries can be executed i.e. (!stdenv.buildPlatform.canExecute stdenv.hostPlatform)";
 
+  meson64-tools = callPackage ../misc/meson64-tools { };
   meson-tools = callPackage ../misc/meson-tools { };
 
   metabase = callPackage ../servers/metabase {
