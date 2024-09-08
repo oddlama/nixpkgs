@@ -9,9 +9,11 @@
 , pahole
 , lib
 , stdenv
+, bash
 , rustc
 , rustPlatform
 , rust-bindgen
+, autokernel
 # testing
 , emptyFile
 , nixos
@@ -182,9 +184,18 @@ let
       # Create the config file.
       echo "generating kernel configuration..."
       ln -s "$kernelConfigPath" "$buildRoot/kernel-config"
-      DEBUG=1 ARCH=$kernelArch KERNEL_CONFIG="$buildRoot/kernel-config" AUTO_MODULES=$autoModules \
+
+      KERNEL_CONFIG="$buildRoot/kernel-config"
+      echo 'load_kconfig_unchecked(kernel_dir .. "/.config")' > kernel-config.lua
+      sed -r 's/^\s*([A-Za-z0-9_]+)(\?)?\s+(.*\S)\s*$/CONFIG_\1 "\3"/' \
+        "$KERNEL_CONFIG" >> kernel-config.lua
+
+      echo -e "[config]\nscript = \"./kernel-config.lua\"" > autokernel.toml
+      DEBUG=1 ARCH=$kernelArch AUTO_MODULES=$autoModules \
         PREFER_BUILTIN=$preferBuiltin BUILD_ROOT="$buildRoot" SRC=. MAKE_FLAGS="$makeFlags" \
-        perl -w $generateConfig
+        ${lib.getExe autokernel} -k . -c autokernel.toml --bash "${bash}/bin/bash" generate-config -o "$BUILD_ROOT/.config"
+
+      #  perl -w $generateConfig
     '';
 
     installPhase = "mv $buildRoot/.config $out";
