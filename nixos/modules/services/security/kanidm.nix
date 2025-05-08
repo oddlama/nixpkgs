@@ -147,9 +147,8 @@ let
   # Only recover the admin account if a password should explicitly be provisioned
   # for the account. Otherwise it is not needed for provisioning.
   maybeRecoverAdmin = optionalString (cfg.provision.adminPasswordFile != null) ''
-    KANIDM_ADMIN_PASSWORD=$(< ${cfg.provision.adminPasswordFile})
     # We always reset the admin account password if a desired password was specified.
-    if ! KANIDM_RECOVER_ACCOUNT_PASSWORD=$KANIDM_ADMIN_PASSWORD ${cfg.package}/bin/kanidmd recover-account -c ${serverConfigFile} admin --from-environment >/dev/null; then
+    if ! KANIDM_RECOVER_ACCOUNT_PASSWORD_FILE=${cfg.provision.adminPasswordFile} ${cfg.package}/bin/kanidmd recover-account -c ${serverConfigFile} admin --from-environment >/dev/null; then
       echo "Failed to recover admin account" >&2
       exit 1
     fi
@@ -161,9 +160,8 @@ let
   recoverIdmAdmin =
     if cfg.provision.idmAdminPasswordFile != null then
       ''
-        KANIDM_IDM_ADMIN_PASSWORD=$(< ${cfg.provision.idmAdminPasswordFile})
         # We always reset the idm_admin account password if a desired password was specified.
-        if ! KANIDM_RECOVER_ACCOUNT_PASSWORD=$KANIDM_IDM_ADMIN_PASSWORD ${cfg.package}/bin/kanidmd recover-account -c ${serverConfigFile} idm_admin --from-environment >/dev/null; then
+        if ! KANIDM_RECOVER_ACCOUNT_PASSWORD_FILE=${cfg.provision.idmAdminPasswordFile} ${cfg.package}/bin/kanidmd recover-account -c ${serverConfigFile} idm_admin --from-environment >/dev/null; then
           echo "Failed to recover idm_admin account" >&2
           exit 1
         fi
@@ -176,7 +174,7 @@ let
           echo "kanidm provision: Failed to recover admin account" >&2
           exit 1
         fi
-        if ! KANIDM_IDM_ADMIN_PASSWORD=$(grep '{"password' <<< "$recover_out" | ${getExe pkgs.jq} -r .password); then
+        if ! KANIDM_RECOVER_ACCOUNT_PASSWORD_FILE=$(grep '{"password' <<< "$recover_out" | ${getExe pkgs.jq} -r .password); then
           echo "$recover_out" >&2
           echo "kanidm provision: Failed to parse password for idm_admin account" >&2
           exit 1
