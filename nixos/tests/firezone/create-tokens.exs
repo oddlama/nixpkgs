@@ -18,7 +18,7 @@ end
 
 IO.puts("INFO: Fetching service account actor")
 actor_id = get_in(mappings, ["accounts", "main", "actors", "client"])
-actor = case Repo.get(Actor, actor_id) do
+actor = case Repo.get_by(Actor, account_id: account.id, id: actor_id) do
   nil -> raise "Actor '#{actor_id}' not found"
   actor -> actor
 end

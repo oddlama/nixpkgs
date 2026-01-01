@@ -1,5 +1,5 @@
 defmodule Provision do
-  alias Portal.{Repo, Account, Auth, Actor, Resource, ClientToken, Site, Group, Policy, Membership}
+  alias Portal.{Repo, Account, Auth, Actor, Resource, Site, Group, Policy, Membership}
   alias Portal.EmailOTP.AuthProvider, as: EmailOTPAuthProvider
   alias Portal.AuthProvider
   require Logger
@@ -288,8 +288,10 @@ defmodule Provision do
           case Repo.get_by(Account, slug: slug) do
             nil ->
               Logger.info("Creating new account #{slug}")
+              # legal_name defaults to name if not provided
+              account_attrs_with_legal = Map.put_new(account_attrs, :legal_name, account_attrs[:name])
               account = %Account{}
-                |> Ecto.Changeset.cast(account_attrs, [:name, :slug])
+                |> Ecto.Changeset.cast(account_attrs_with_legal, [:name, :slug, :legal_name])
                 |> Ecto.Changeset.cast_embed(:features)
                 |> Ecto.Changeset.cast_embed(:limits)
                 |> Ecto.Changeset.cast_embed(:metadata)
@@ -309,6 +311,20 @@ defmodule Provision do
                 type: :internet,
                 site_id: internet_site.id
               } |> repo.insert!()
+
+              # Create default Userpass auth provider for new accounts
+              Logger.info("Creating default Userpass auth provider")
+              provider_id = Ecto.UUID.generate()
+              repo.insert!(%AuthProvider{
+                id: provider_id,
+                account_id: account.id,
+                type: :userpass
+              })
+              repo.insert!(%Portal.Userpass.AuthProvider{
+                id: provider_id,
+                account_id: account.id,
+                name: "Username & Password"
+              })
 
               # Store mapping of slug to UUID
               UuidMapping.update_account(slug, account.id)
@@ -391,21 +407,29 @@ defmodule Provision do
           case uuid && Repo.get(Actor, uuid) do
             nil ->
               Logger.info("Creating new actor #{actor_data["name"]}")
-              actor = %Actor{
-                account_id: account.id,
-                type: String.to_existing_atom(actor_data["type"]),
-                name: actor_data["name"],
-                email: actor_data["email"]
-              } |> repo.insert!()
+              actor_type = String.to_existing_atom(actor_data["type"])
+              # service_account and api_client must NOT have email (constraint requirement)
+              # account_user and account_admin_user MUST have email
+              actor_attrs = case actor_type do
+                type when type in [:service_account, :api_client] ->
+                  %{account_id: account.id, type: type, name: actor_data["name"]}
+                _ ->
+                  %{account_id: account.id, type: actor_type, name: actor_data["name"], email: actor_data["email"]}
+              end
+              actor = struct(Actor, actor_attrs) |> repo.insert!()
               UuidMapping.update_entities(slug, "actors", %{external_id => actor.id})
               {:ok, actor}
             existing_actor ->
               Logger.info("Updating existing actor #{actor_data["name"]}")
+              # Only set email for account_user and account_admin_user types
+              update_attrs = case existing_actor.type do
+                type when type in [:service_account, :api_client] ->
+                  %{name: actor_data["name"]}
+                _ ->
+                  %{name: actor_data["name"], email: actor_data["email"]}
+              end
               updated_actor = existing_actor
-                |> Ecto.Changeset.change(%{
-                  name: actor_data["name"],
-                  email: actor_data["email"]
-                })
+                |> Ecto.Changeset.change(update_attrs)
                 |> repo.update!()
               {:ok, updated_actor}
           end
@@ -561,16 +585,16 @@ defmodule Provision do
             nil ->
               Logger.info("Creating new resource #{resource_data["name"]}")
               resource = %Resource{account_id: account.id}
-                |> Ecto.Changeset.cast(resource_attrs, [:type, :name, :address, :address_description, :site_id])
-                |> Ecto.Changeset.cast_embed(:filters)
+                |> Ecto.Changeset.change(resource_attrs)
+                |> Resource.changeset()
                 |> repo.insert!()
               UuidMapping.update_entities(slug, "resources", %{external_id => resource.id})
               {:ok, resource}
             existing ->
               Logger.info("Updating existing resource #{resource_data["name"]}")
               updated_resource = existing
-                |> Ecto.Changeset.cast(resource_attrs, [:type, :name, :address, :address_description, :site_id])
-                |> Ecto.Changeset.cast_embed(:filters)
+                |> Ecto.Changeset.change(resource_attrs)
+                |> Resource.changeset()
                 |> repo.update!()
               {:ok, updated_resource}
           end

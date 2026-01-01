@@ -189,14 +189,15 @@ let
     RestartSec = 10;
   };
 
-  componentOptions = component: {
-    enable = mkEnableOption "the Firezone ${component} server";
-    package = mkPackageOption pkgs "firezone-server-${component}" { };
+  componentOptions = {
+    enable = mkEnableOption "the Firezone server";
+    package = mkPackageOption pkgs "firezone-server-portal" { };
 
     settings = mkOption {
       description = ''
-        Environment variables for this component of the Firezone server. For a
-        list of available variables, please refer to the [upstream definitions](https://github.com/firezone/firezone/blob/main/elixir/apps/domain/lib/domain/config/definitions.ex).
+        Environment variables for the Firezone server. For a list of available
+        variables, please refer to the [upstream
+        definitions](https://github.com/firezone/firezone/blob/main/elixir/lib/portal/config/definitions.ex).
         Some variables like `OUTBOUND_EMAIL_ADAPTER_OPTS` require json values
         for which you can use `VAR = builtins.toJSON { /* ... */ }`.
 
@@ -458,7 +459,7 @@ in
       };
     };
 
-    portal = componentOptions "portal" // {
+    portal = componentOptions // {
       externalUrl = mkOption {
         type = types.strMatching "^https://.+/$";
         example = "https://firezone.example.com/";
@@ -969,7 +970,7 @@ in
 
         portal.settings = {
           ERLANG_DISTRIBUTION_PORT = mkDefault 9000;
-          HEALTHZ_PORT = mkDefault 4000;
+          HEALTH_PORT = mkDefault 4000;
           BACKGROUND_JOBS_ENABLED = mkDefault true;
 
           PHOENIX_LISTEN_ADDRESS = mkDefault cfg.portal.address;
@@ -1065,7 +1066,7 @@ in
         postStart = ''
           # Wait for the firezone server to come online
           count=0
-          while [[ "$(curl -s "http://localhost:${toString cfg.portal.settings.HEALTHZ_PORT}" 2>/dev/null || echo)" != '{"status":"ok"}' ]]
+          while [[ "$(curl -s "http://localhost:${toString cfg.portal.settings.HEALTH_PORT}/healthz" 2>/dev/null || echo)" != '{"status":"ok"}' ]]
           do
             sleep 1
             if [[ "$count" -eq 30 ]]; then

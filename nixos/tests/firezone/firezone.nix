@@ -339,7 +339,7 @@ in
       start_all()
 
       with subtest("Start server"):
-          server.wait_for_unit("firezone.target")
+          server.wait_for_unit("firezone-server-portal.service")
           server.wait_until_succeeds("curl -Lsf https://${domain} | grep 'Welcome to Firezone'")
           server.wait_until_succeeds("curl -Ls https://${domain}/api | grep 'Not Found'")
 
