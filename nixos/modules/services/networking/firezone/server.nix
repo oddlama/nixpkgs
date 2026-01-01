@@ -1120,7 +1120,8 @@ in
           ${loadSecretEnvironment "domain"}
 
           echo "Running migrations"
-          ${getExe cfg.domain.package} eval Domain.Release.migrate
+          export RUN_MANUAL_MIGRATIONS="true"
+          ${getExe cfg.domain.package} eval Portal.Release.migrate
         '';
 
         # We use the domain environment to be able to run migrations

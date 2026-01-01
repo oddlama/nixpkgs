@@ -15,36 +15,36 @@
 }:
 beamPackages.mixRelease rec {
   pname = "firezone-server-${mixReleaseName}";
-  version = "0-unstable-2025-08-31";
+  version = "0-unstable-2025-12-24";
 
   src = "${
     fetchFromGitHub {
       owner = "firezone";
       repo = "firezone";
-      rev = "f86719db19b848ab757995361032c1f2b7927d13";
-      hash = "sha256-YvPxLEE6pdILrABWCZs7ebf6i3Inm1k/YkotZgI7A2k=";
+      rev = "2766298f4a3698e12b798ebd2113397608f0413f";
+      hash = "sha256-sRZch5cJBjpazWiZ6tW+BNLg4tnmRAPGPboxX+0jCTQ=";
 
       # This is necessary to allow sending mails via SMTP, as the default
       # SMTP adapter is current broken: https://github.com/swoosh/swoosh/issues/785
       postFetch = ''
-        ${lib.getExe gitMinimal} -C $out apply ${./0000-add-mua.patch}
+        ${lib.getExe gitMinimal} -C $out apply ${./0000-add-mua.patch} ${./0001-remove-hardcoded-domain-config.patch}
       '';
     }
   }/elixir";
 
   pnpmDeps = fetchPnpmDeps {
-    inherit pname version;
+    inherit pname version src;
     pnpm = pnpm_9;
-    src = "${src}/apps/web/assets";
     fetcherVersion = 1;
-    hash = "sha256-40vtQIBhJNnzdxkAOVAcPN57IuD0IB6LFxGICo68AbQ=";
+    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";  # Needs to be updated
   };
-  pnpmRoot = "apps/web/assets";
+  pnpmRoot = "assets";
 
   preBuild = ''
     cat >> config/config.exs <<EOF
     config :tailwind, path: "${lib.getExe tailwindcss_3}"
     config :esbuild, path: "${lib.getExe esbuild}"
+    config :portal, run_manual_migrations: true
     EOF
 
     cat >> config/runtime.exs <<EOF
@@ -53,12 +53,12 @@ beamPackages.mixRelease rec {
   '';
 
   postBuild = ''
-    pushd apps/web
+    # New firezone structure - no longer an umbrella app
+    # Assets are in portal_web application
     # for external task you need a workaround for the no deps check flag
     # https://github.com/phoenixframework/phoenix/issues/2690
     mix do deps.loadpaths --no-deps-check, assets.deploy
-    mix do deps.loadpaths --no-deps-check, phx.digest priv/static
-    popd
+    mix do deps.loadpaths --no-deps-check, phx.digest
   '';
 
   nativeBuildInputs = [
@@ -72,7 +72,7 @@ beamPackages.mixRelease rec {
   mixFodDeps = beamPackages.fetchMixDeps {
     pname = "mix-deps-${pname}-${version}";
     inherit src version;
-    hash = "sha256-h3l7HK9dxNmkHWfJyCOCXmCvFOK+mZtmszhRv0zxqoo=";
+    hash = "sha256-laoKRVdOOC7XFjhp6PuJGyaCzzRLiZRFFBzfX6zNHY4=";
   };
 
   passthru.tests = {
