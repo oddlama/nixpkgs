@@ -1,4 +1,4 @@
 { firezone-server }:
 firezone-server.override {
-  mixReleaseName = "api";
+  mixReleaseName = "portal";
 }

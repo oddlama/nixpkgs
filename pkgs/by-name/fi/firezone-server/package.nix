@@ -11,18 +11,18 @@
   tailwindcss_3,
   esbuild,
 
-  mixReleaseName ? "domain", # "domain" "web" or "api"
+  mixReleaseName ? "portal", # portal release (was "domain" in older versions)
 }:
 beamPackages.mixRelease rec {
   pname = "firezone-server-${mixReleaseName}";
-  version = "0-unstable-2025-12-24";
+  version = "0-unstable-2025-12-31";
 
   src = "${
     fetchFromGitHub {
       owner = "firezone";
       repo = "firezone";
-      rev = "2766298f4a3698e12b798ebd2113397608f0413f";
-      hash = "sha256-sRZch5cJBjpazWiZ6tW+BNLg4tnmRAPGPboxX+0jCTQ=";
+      rev = "96ca73bf827339cdae2258cf64230fd0407f29f6";
+      hash = "sha256-Q0NqBaQRGI4EwOcuYOrY66q8fux/rh4H67iFYBcuZGE=";
 
       # This is necessary to allow sending mails via SMTP, as the default
       # SMTP adapter is current broken: https://github.com/swoosh/swoosh/issues/785
@@ -35,8 +35,9 @@ beamPackages.mixRelease rec {
   pnpmDeps = fetchPnpmDeps {
     inherit pname version src;
     pnpm = pnpm_9;
+    sourceRoot = "elixir/assets";
     fetcherVersion = 1;
-    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";  # Needs to be updated
+    hash = "sha256-3gv+0KjB1Xcsr1zUrzmWmeTSLtgz+FcqSlXtsf4hzjU=";
   };
   pnpmRoot = "assets";
 
@@ -72,7 +73,7 @@ beamPackages.mixRelease rec {
   mixFodDeps = beamPackages.fetchMixDeps {
     pname = "mix-deps-${pname}-${version}";
     inherit src version;
-    hash = "sha256-laoKRVdOOC7XFjhp6PuJGyaCzzRLiZRFFBzfX6zNHY4=";
+    hash = "sha256-MlY8TO+tqaq8kpOYfxpwvLAvdrUJqnmKiZ6+MOzcGB0=";
   };
 
   passthru.tests = {

@@ -1,8 +1,8 @@
-diff --git a/elixir/apps/domain/lib/domain/config/definitions.ex b/elixir/apps/domain/lib/domain/config/definitions.ex
+diff --git a/elixir/lib/portal/config/definitions.ex b/elixir/lib/portal/config/definitions.ex
 index 1bef5a6b6..22857500f 100644
---- a/elixir/apps/domain/lib/domain/config/definitions.ex
-+++ b/elixir/apps/domain/lib/domain/config/definitions.ex
-@@ -628,6 +628,7 @@ defmodule Domain.Config.Definitions do
+--- a/elixir/lib/portal/config/definitions.ex
++++ b/elixir/lib/portal/config/definitions.ex
+@@ -560,6 +560,7 @@ defmodule Portal.Config.Definitions do
            Swoosh.Adapters.Mailgun,
            Swoosh.Adapters.Mailjet,
            Swoosh.Adapters.Mandrill,
@@ -14,17 +14,19 @@ diff --git a/elixir/mix.exs b/elixir/mix.exs
 index 01ca3dc3d..dc7f27150 100644
 --- a/elixir/mix.exs
 +++ b/elixir/mix.exs
-@@ -63,7 +63,9 @@ defmodule Firezone.MixProject do
-       {:phoenix, "~> 1.8.1"},
-       {:phoenix_live_view, "~> 1.1.8"},
-       {:lazy_html, ">= 0.1.0", only: :test},
--      {:floki, "~> 0.38.0"}
-+      {:floki, "~> 0.38.0"},
+@@ -133,7 +133,11 @@ defmodule Portal.MixProject do
+       {:credo, "~> 1.5", only: [:dev, :test], runtime: false},
+       {:dialyxir, "~> 1.1", only: [:dev, :test], runtime: false},
+       {:mix_audit, "~> 2.1", only: [:dev, :test]},
+-      {:sobelow, "~> 0.12", only: [:dev, :test]}
++      {:sobelow, "~> 0.12", only: [:dev, :test]},
++
++      # SMTP adapter
 +      {:mua, "~> 0.2.0"},
 +      {:mail, "~> 0.4.0"}
      ]
    end
- 
+
 diff --git a/elixir/mix.lock b/elixir/mix.lock
 index 9d0b66b50..849811458 100644
 --- a/elixir/mix.lock
