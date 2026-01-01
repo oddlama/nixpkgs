@@ -153,12 +153,11 @@ in
             };
           };
 
-          api.externalUrl = "https://${domain}/api/";
-          web.externalUrl = "https://${domain}/";
+          portal.externalUrl = "https://${domain}/";
         };
 
-        systemd.services.firezone-server-domain.postStart = lib.mkAfter ''
-          ${lib.getExe config.services.firezone.server.domain.package} rpc 'Code.eval_file("${./create-tokens.exs}")'
+        systemd.services.firezone-server-portal.postStart = lib.mkAfter ''
+          ${lib.getExe config.services.firezone.server.portal.package} rpc 'Code.eval_file("${./create-tokens.exs}")'
         '';
       };
 

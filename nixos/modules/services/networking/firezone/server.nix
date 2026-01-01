@@ -241,16 +241,14 @@ in
     clusterHosts = mkOption {
       type = types.listOf types.str;
       default = [
-        "api@localhost.localdomain"
-        "web@localhost.localdomain"
-        "domain@localhost.localdomain"
+        "portal@localhost.localdomain"
       ];
       description = ''
-        A list of components and their hosts that are part of this cluster. For
-        a single-machine setup, the default value will be sufficient. This
-        value will automatically set `ERLANG_CLUSTER_ADAPTER_CONFIG`.
+        A list of nodes that are part of this cluster. For a single-machine
+        setup, the default value will be sufficient. This value will
+        automatically set `ERLANG_CLUSTER_ADAPTER_CONFIG`.
 
-        The format is `<COMPONENT_NAME>@<HOSTNAME>`.
+        The format is `<NODE_NAME>@<HOSTNAME>`.
       '';
     };
 
@@ -460,44 +458,12 @@ in
       };
     };
 
-    domain = componentOptions "domain";
-
-    web = componentOptions "web" // {
+    portal = componentOptions "portal" // {
       externalUrl = mkOption {
         type = types.strMatching "^https://.+/$";
         example = "https://firezone.example.com/";
         description = ''
-          The external URL under which you will serve the web interface. You
-          need to setup a reverse proxy for TLS termination, either with
-          {option}`services.firezone.server.nginx.enable` or manually.
-        '';
-      };
-
-      address = mkOption {
-        type = types.str;
-        default = "127.0.0.1";
-        description = "The address to listen on";
-      };
-
-      port = mkOption {
-        type = types.port;
-        default = 8080;
-        description = "The port under which the web interface will be served locally";
-      };
-
-      trustedProxies = mkOption {
-        type = types.listOf types.str;
-        default = [ ];
-        description = "A list of trusted proxies";
-      };
-    };
-
-    api = componentOptions "api" // {
-      externalUrl = mkOption {
-        type = types.strMatching "^https://.+/$";
-        example = "https://firezone.example.com/api/";
-        description = ''
-          The external URL under which you will serve the api. You need to
+          The external URL under which you will serve Firezone. You need to
           setup a reverse proxy for TLS termination, either with
           {option}`services.firezone.server.nginx.enable` or manually.
         '';
@@ -511,8 +477,8 @@ in
 
       port = mkOption {
         type = types.port;
-        default = 8081;
-        description = "The port under which the api will be served locally";
+        default = 8080;
+        description = "The port under which Firezone will be served locally";
       };
 
       trustedProxies = mkOption {
@@ -886,8 +852,8 @@ in
     {
       assertions = [
         {
-          assertion = cfg.provision.enable -> cfg.domain.enable;
-          message = "Provisioning must be done on a machine running the firezone domain server";
+          assertion = cfg.provision.enable -> cfg.portal.enable;
+          message = "Provisioning must be done on a machine running the firezone portal server";
         }
       ]
       ++ concatLists (
@@ -908,11 +874,9 @@ in
         )
       );
     }
-    # Enable all components if the main server is enabled
+    # Enable portal if the main server is enabled
     (mkIf cfg.enable {
-      services.firezone.server.domain.enable = true;
-      services.firezone.server.web.enable = true;
-      services.firezone.server.api.enable = true;
+      services.firezone.server.portal.enable = true;
     })
     # Create (and configure) a local database if desired
     (mkIf cfg.enableLocalDB {
@@ -947,7 +911,7 @@ in
         }
         (
           let
-            urlComponents = builtins.elemAt (builtins.split "https://([^/]*)(/?.*)" cfg.web.externalUrl) 1;
+            urlComponents = builtins.elemAt (builtins.split "https://([^/]*)(/?.*)" cfg.portal.externalUrl) 1;
             domain = builtins.elemAt urlComponents 0;
             location = builtins.elemAt urlComponents 1;
           in
@@ -956,24 +920,7 @@ in
               forceSSL = mkDefault true;
               locations.${location} = {
                 # The trailing slash is important to strip the location prefix from the request
-                proxyPass = "http://${cfg.web.address}:${toString cfg.web.port}/";
-                proxyWebsockets = true;
-              };
-            };
-          }
-        )
-        (
-          let
-            urlComponents = builtins.elemAt (builtins.split "https://([^/]*)(/?.*)" cfg.api.externalUrl) 1;
-            domain = builtins.elemAt urlComponents 0;
-            location = builtins.elemAt urlComponents 1;
-          in
-          {
-            virtualHosts.${domain} = {
-              forceSSL = mkDefault true;
-              locations.${location} = {
-                # The trailing slash is important to strip the location prefix from the request
-                proxyPass = "http://${cfg.api.address}:${toString cfg.api.port}/";
+                proxyPass = "http://${cfg.portal.address}:${toString cfg.portal.port}/";
                 proxyWebsockets = true;
               };
             };
@@ -1017,37 +964,17 @@ in
 
           FEATURE_SIGN_UP_ENABLED = mkDefault (!cfg.provision.enable);
 
-          WEB_EXTERNAL_URL = mkDefault cfg.web.externalUrl;
-          API_EXTERNAL_URL = mkDefault cfg.api.externalUrl;
+          WEB_EXTERNAL_URL = mkDefault cfg.portal.externalUrl;
         };
 
-        domain.settings = {
+        portal.settings = {
           ERLANG_DISTRIBUTION_PORT = mkDefault 9000;
           HEALTHZ_PORT = mkDefault 4000;
           BACKGROUND_JOBS_ENABLED = mkDefault true;
-        };
 
-        web.settings = {
-          ERLANG_DISTRIBUTION_PORT = mkDefault 9001;
-          HEALTHZ_PORT = mkDefault 4001;
-          BACKGROUND_JOBS_ENABLED = mkDefault false;
-
-          PHOENIX_LISTEN_ADDRESS = mkDefault cfg.web.address;
-          PHOENIX_EXTERNAL_TRUSTED_PROXIES = mkDefault (builtins.toJSON cfg.web.trustedProxies);
-          PHOENIX_HTTP_WEB_PORT = mkDefault cfg.web.port;
-          PHOENIX_HTTP_API_PORT = mkDefault cfg.api.port;
-          PHOENIX_SECURE_COOKIES = mkDefault true; # enforce HTTPS on cookies
-        };
-
-        api.settings = {
-          ERLANG_DISTRIBUTION_PORT = mkDefault 9002;
-          HEALTHZ_PORT = mkDefault 4002;
-          BACKGROUND_JOBS_ENABLED = mkDefault false;
-
-          PHOENIX_LISTEN_ADDRESS = mkDefault cfg.api.address;
-          PHOENIX_EXTERNAL_TRUSTED_PROXIES = mkDefault (builtins.toJSON cfg.api.trustedProxies);
-          PHOENIX_HTTP_WEB_PORT = mkDefault cfg.web.port;
-          PHOENIX_HTTP_API_PORT = mkDefault cfg.api.port;
+          PHOENIX_LISTEN_ADDRESS = mkDefault cfg.portal.address;
+          PHOENIX_EXTERNAL_TRUSTED_PROXIES = mkDefault (builtins.toJSON cfg.portal.trustedProxies);
+          PHOENIX_HTTP_WEB_PORT = mkDefault cfg.portal.port;
           PHOENIX_SECURE_COOKIES = mkDefault true; # enforce HTTPS on cookies
         };
       };
@@ -1079,22 +1006,12 @@ in
         )
       );
     })
-    (mkIf (cfg.openClusterFirewall && cfg.domain.enable) {
+    (mkIf (cfg.openClusterFirewall && cfg.portal.enable) {
       networking.firewall.allowedTCPPorts = [
-        cfg.domain.settings.ERLANG_DISTRIBUTION_PORT
+        cfg.portal.settings.ERLANG_DISTRIBUTION_PORT
       ];
     })
-    (mkIf (cfg.openClusterFirewall && cfg.web.enable) {
-      networking.firewall.allowedTCPPorts = [
-        cfg.web.settings.ERLANG_DISTRIBUTION_PORT
-      ];
-    })
-    (mkIf (cfg.openClusterFirewall && cfg.api.enable) {
-      networking.firewall.allowedTCPPorts = [
-        cfg.api.settings.ERLANG_DISTRIBUTION_PORT
-      ];
-    })
-    (mkIf (cfg.domain.enable || cfg.web.enable || cfg.api.enable) {
+    (mkIf cfg.portal.enable {
       systemd.slices.system-firezone = {
         description = "Firezone Slice";
       };
@@ -1117,38 +1034,38 @@ in
 
           # Generate and load secrets
           ${generateSecrets}
-          ${loadSecretEnvironment "domain"}
+          ${loadSecretEnvironment "portal"}
 
           echo "Running migrations"
           export RUN_MANUAL_MIGRATIONS="true"
-          ${getExe cfg.domain.package} eval Portal.Release.migrate
+          ${getExe cfg.portal.package} eval Portal.Release.migrate
         '';
 
-        # We use the domain environment to be able to run migrations
-        environment = collectEnvironment "domain";
+        # We use the portal environment to be able to run migrations
+        environment = collectEnvironment "portal";
         serviceConfig = commonServiceConfig // {
           Type = "oneshot";
           RemainAfterExit = true;
         };
       };
 
-      systemd.services.firezone-server-domain = mkIf cfg.domain.enable {
-        description = "Backend domain server for the Firezone zero-trust access platform";
+      systemd.services.firezone-server-portal = {
+        description = "Backend portal server for the Firezone zero-trust access platform";
         after = [ "firezone-initialize.service" ];
         bindsTo = [ "firezone-initialize.service" ];
         wantedBy = [ "firezone.target" ];
         partOf = [ "firezone.target" ];
 
         script = ''
-          ${loadSecretEnvironment "domain"}
-          exec ${getExe cfg.domain.package} start;
+          ${loadSecretEnvironment "portal"}
+          exec ${getExe cfg.portal.package} start;
         '';
 
         path = [ pkgs.curl ];
         postStart = ''
           # Wait for the firezone server to come online
           count=0
-          while [[ "$(curl -s "http://localhost:${toString cfg.domain.settings.HEALTHZ_PORT}" 2>/dev/null || echo)" != '{"status":"ok"}' ]]
+          while [[ "$(curl -s "http://localhost:${toString cfg.portal.settings.HEALTHZ_PORT}" 2>/dev/null || echo)" != '{"status":"ok"}' ]]
           do
             sleep 1
             if [[ "$count" -eq 30 ]]; then
@@ -1162,44 +1079,12 @@ in
           # Wait for server to fully come up. Not ideal to use sleep, but at least it works.
           sleep 1
 
-          ${loadSecretEnvironment "domain"}
+          ${loadSecretEnvironment "portal"}
           ln -sTf ${provisionStateJson} provision-state.json
-          ${getExe cfg.domain.package} rpc 'Code.eval_file("${./provision.exs}")'
+          ${getExe cfg.portal.package} rpc 'Code.eval_file("${./provision.exs}")'
         '';
 
-        environment = collectEnvironment "domain";
-        serviceConfig = commonServiceConfig;
-      };
-
-      systemd.services.firezone-server-web = mkIf cfg.web.enable {
-        description = "Backend web server for the Firezone zero-trust access platform";
-        after = [ "firezone-initialize.service" ];
-        bindsTo = [ "firezone-initialize.service" ];
-        wantedBy = [ "firezone.target" ];
-        partOf = [ "firezone.target" ];
-
-        script = ''
-          ${loadSecretEnvironment "web"}
-          exec ${getExe cfg.web.package} start;
-        '';
-
-        environment = collectEnvironment "web";
-        serviceConfig = commonServiceConfig;
-      };
-
-      systemd.services.firezone-server-api = mkIf cfg.api.enable {
-        description = "Backend api server for the Firezone zero-trust access platform";
-        after = [ "firezone-initialize.service" ];
-        bindsTo = [ "firezone-initialize.service" ];
-        wantedBy = [ "firezone.target" ];
-        partOf = [ "firezone.target" ];
-
-        script = ''
-          ${loadSecretEnvironment "api"}
-          exec ${getExe cfg.api.package} start;
-        '';
-
-        environment = collectEnvironment "api";
+        environment = collectEnvironment "portal";
         serviceConfig = commonServiceConfig;
       };
     })
