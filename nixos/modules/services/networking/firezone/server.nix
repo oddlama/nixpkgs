@@ -27,6 +27,7 @@ let
     mkOption
     mkPackageOption
     mkRemovedOptionModule
+    mkRenamedOptionModule
     optionalAttrs
     optionalString
     recursiveUpdate
@@ -70,9 +71,7 @@ let
       );
 
   # All non-secret environment variables for the portal
-  portalEnvironment = mapAttrs (
-    _: v: if isBool v then boolToString v else toString v
-  ) cfg.settings;
+  portalEnvironment = mapAttrs (_: v: if isBool v then boolToString v else toString v) cfg.settings;
 
   # All mandatory secrets which were not explicitly provided by the user will
   # have to be generated, if they do not yet exist.
@@ -186,16 +185,84 @@ let
 in
 {
   imports = [
-    (mkRemovedOptionModule [ "services" "firezone" "server" "domain" ]
-      "The domain component has been merged into the portal component. All settings are now part of services.firezone.server directly."
+    # Web component migrations
+    (mkRenamedOptionModule
+      [ "services" "firezone" "server" "web" "trustedProxies" ]
+      [ "services" "firezone" "server" "portal" "trustedProxies" ]
+    )
+    (mkRenamedOptionModule
+      [ "services" "firezone" "server" "web" "settings" ]
+      [ "services" "firezone" "server" "settings" ]
+    )
+    (mkRenamedOptionModule
+      [ "services" "firezone" "server" "web" "port" ]
+      [ "services" "firezone" "server" "portal" "port" ]
+    )
+    (mkRemovedOptionModule [ "services" "firezone" "server" "web" "package" ]
+      "The web component has been merged into the portal. Use services.firezone.server.package instead."
+    )
+    (mkRenamedOptionModule
+      [ "services" "firezone" "server" "web" "externalUrl" ]
+      [ "services" "firezone" "server" "portal" "externalUrl" ]
+    )
+    (mkRemovedOptionModule [
+      "services"
+      "firezone"
+      "server"
+      "web"
+      "enable"
+    ] "The web component has been merged into the portal. Use services.firezone.server.enable instead.")
+    (mkRenamedOptionModule
+      [ "services" "firezone" "server" "web" "address" ]
+      [ "services" "firezone" "server" "portal" "address" ]
     )
 
-    (mkRemovedOptionModule [ "services" "firezone" "server" "web" ]
-      "The web component has been merged into the portal component. All settings are now part of services.firezone.server directly."
+    # API component migrations
+    (mkRenamedOptionModule
+      [ "services" "firezone" "server" "api" "trustedProxies" ]
+      [ "services" "firezone" "server" "portal" "trustedProxies" ]
+    )
+    (mkRenamedOptionModule
+      [ "services" "firezone" "server" "api" "settings" ]
+      [ "services" "firezone" "server" "settings" ]
+    )
+    (mkRenamedOptionModule
+      [ "services" "firezone" "server" "api" "port" ]
+      [ "services" "firezone" "server" "portal" "port" ]
+    )
+    (mkRemovedOptionModule [ "services" "firezone" "server" "api" "package" ]
+      "The api component has been merged into the portal. Use services.firezone.server.package instead."
+    )
+    (mkRemovedOptionModule [ "services" "firezone" "server" "api" "externalUrl" ]
+      "The api component has been merged into the portal and now automatically uses the /api/ path on the portal's external URL."
+    )
+    (mkRemovedOptionModule [
+      "services"
+      "firezone"
+      "server"
+      "api"
+      "enable"
+    ] "The api component has been merged into the portal. Use services.firezone.server.enable instead.")
+    (mkRenamedOptionModule
+      [ "services" "firezone" "server" "api" "address" ]
+      [ "services" "firezone" "server" "portal" "address" ]
     )
 
-    (mkRemovedOptionModule [ "services" "firezone" "server" "api" ]
-      "The api component has been merged into the portal component. All settings are now part of services.firezone.server directly."
+    # Domain component migrations
+    (mkRenamedOptionModule
+      [ "services" "firezone" "server" "domain" "settings" ]
+      [ "services" "firezone" "server" "settings" ]
+    )
+    (mkRemovedOptionModule [ "services" "firezone" "server" "domain" "package" ]
+      "The domain component has been merged into the portal. Use services.firezone.server.package instead."
+    )
+    (mkRemovedOptionModule [ "services" "firezone" "server" "domain" "enable" ]
+      "The domain component has been merged into the portal. Use services.firezone.server.enable instead."
+    )
+
+    # Portal settings was removed - use global settings instead
+    (mkRemovedOptionModule [ "services" "firezone" "server" "portal" "settings" ]
+      "Portal-specific settings have been merged into services.firezone.server.settings. Use that option instead."
     )
   ];
 
@@ -203,6 +270,8 @@ in
     enable = mkEnableOption "the Firezone portal server";
     enableLocalDB = mkEnableOption "a local postgresql database for Firezone";
     nginx.enable = mkEnableOption "nginx virtualhost definition";
+
+    package = mkPackageOption pkgs "firezone-server" { };
 
     openClusterFirewall = mkOption {
       type = types.bool;
@@ -424,10 +493,6 @@ in
     };
 
     portal = {
-      enable = mkEnableOption "the Firezone portal server";
-
-      package = mkPackageOption pkgs "firezone-server-portal" { };
-
       externalUrl = mkOption {
         type = types.strMatching "^https://.+/$";
         example = "https://firezone.example.com/";
@@ -824,13 +889,7 @@ in
 
   config = mkMerge [
     {
-      assertions = [
-        {
-          assertion = cfg.provision.enable -> cfg.portal.enable;
-          message = "Provisioning must be done on a machine running the firezone portal server";
-        }
-      ]
-      ++ concatLists (
+      assertions = concatLists (
         flip mapAttrsToList cfg.provision.accounts (
           accountName: accountCfg:
           [
@@ -848,12 +907,8 @@ in
         )
       );
     }
-    # Enable portal if the main server is enabled
-    (mkIf cfg.enable {
-      services.firezone.server.portal.enable = true;
-    })
     # Create (and configure) a local database if desired
-    (mkIf cfg.enableLocalDB {
+    (mkIf (cfg.enable && cfg.enableLocalDB) {
       services.postgresql = {
         enable = true;
         ensureUsers = [
@@ -878,7 +933,7 @@ in
       };
     })
     # Create a local nginx reverse proxy
-    (mkIf cfg.nginx.enable {
+    (mkIf (cfg.enable && cfg.nginx.enable) {
       services.nginx = mkMerge [
         {
           enable = true;
@@ -911,53 +966,51 @@ in
     })
     # Specify sensible defaults
     {
-      services.firezone.server = {
-        settings = {
-          # Erlang/OTP-specific variables (not in Portal config definitions but required by Erlang runtime)
-          LOG_LEVEL = mkDefault "info";
-          RELEASE_HOSTNAME = mkDefault "localhost.localdomain";
-          TZDATA_DIR = mkDefault "/var/lib/firezone/tzdata";
-          TELEMETRY_ENABLED = mkDefault false;
+      services.firezone.server.settings = {
+        # Erlang/OTP-specific variables (not in Portal config definitions but required by Erlang runtime)
+        LOG_LEVEL = mkDefault "info";
+        RELEASE_HOSTNAME = mkDefault "localhost.localdomain";
+        TZDATA_DIR = mkDefault "/var/lib/firezone/tzdata";
+        TELEMETRY_ENABLED = mkDefault false;
 
-          ERLANG_CLUSTER_ADAPTER = mkDefault "Elixir.Cluster.Strategy.Epmd";
-          ERLANG_CLUSTER_ADAPTER_CONFIG = mkDefault (
-            builtins.toJSON {
-              hosts = cfg.clusterHosts;
-            }
-          );
+        ERLANG_CLUSTER_ADAPTER = mkDefault "Elixir.Cluster.Strategy.Epmd";
+        ERLANG_CLUSTER_ADAPTER_CONFIG = mkDefault (
+          builtins.toJSON {
+            hosts = cfg.clusterHosts;
+          }
+        );
 
-          # By default this will open nproc * 2 connections, which can exceed the
-          # (default) maximum of 100 connections for postgresql on a 12 core +SMT
-          # machine. 16 connections will be sufficient for small to medium deployments
-          DATABASE_POOL_SIZE = "16";
+        # By default this will open nproc * 2 connections, which can exceed the
+        # (default) maximum of 100 connections for postgresql on a 12 core +SMT
+        # machine. 16 connections will be sufficient for small to medium deployments
+        DATABASE_POOL_SIZE = "16";
 
-          AUTH_PROVIDER_ADAPTERS = mkDefault (concatStringsSep "," availableAuthAdapters);
+        AUTH_PROVIDER_ADAPTERS = mkDefault (concatStringsSep "," availableAuthAdapters);
 
-          # Feature flags
-          FEATURE_POLICY_CONDITIONS_ENABLED = mkDefault true;
-          FEATURE_MULTI_SITE_RESOURCES_ENABLED = mkDefault true;
-          FEATURE_IDP_SYNC_ENABLED = mkDefault true;
-          FEATURE_REST_API_ENABLED = mkDefault true;
-          FEATURE_INTERNET_RESOURCE_ENABLED = mkDefault true;
-          FEATURE_SIGN_UP_ENABLED = mkDefault (!cfg.provision.enable);
+        # Feature flags
+        FEATURE_POLICY_CONDITIONS_ENABLED = mkDefault true;
+        FEATURE_MULTI_SITE_RESOURCES_ENABLED = mkDefault true;
+        FEATURE_IDP_SYNC_ENABLED = mkDefault true;
+        FEATURE_REST_API_ENABLED = mkDefault true;
+        FEATURE_INTERNET_RESOURCE_ENABLED = mkDefault true;
+        FEATURE_SIGN_UP_ENABLED = mkDefault (!cfg.provision.enable);
 
-          WEB_EXTERNAL_URL = mkDefault cfg.portal.externalUrl;
-          # API endpoint (for relay/gateway/client WebSockets) uses /api/ path on same domain
-          API_EXTERNAL_URL = mkDefault "${cfg.portal.externalUrl}/api/";
+        WEB_EXTERNAL_URL = mkDefault cfg.portal.externalUrl;
+        # API endpoint (for relay/gateway/client WebSockets) uses /api/ path on same domain
+        API_EXTERNAL_URL = mkDefault "${cfg.portal.externalUrl}api/";
 
-          # Portal-specific settings
-          ERLANG_DISTRIBUTION_PORT = mkDefault 9000;
-          HEALTH_PORT = mkDefault 4000;
-          BACKGROUND_JOBS_ENABLED = mkDefault true;
-          PHOENIX_LISTEN_ADDRESS = mkDefault cfg.portal.address;
-          PHOENIX_EXTERNAL_TRUSTED_PROXIES = mkDefault (builtins.toJSON cfg.portal.trustedProxies);
-          PHOENIX_HTTP_WEB_PORT = mkDefault cfg.portal.port;
-          PHOENIX_HTTP_API_PORT = mkDefault 8081; # API endpoint on separate port
-          PHOENIX_SECURE_COOKIES = mkDefault true; # enforce HTTPS on cookies
-        };
+        # Portal-specific settings
+        ERLANG_DISTRIBUTION_PORT = mkDefault 9000;
+        HEALTH_PORT = mkDefault 4000;
+        BACKGROUND_JOBS_ENABLED = mkDefault true;
+        PHOENIX_LISTEN_ADDRESS = mkDefault cfg.portal.address;
+        PHOENIX_EXTERNAL_TRUSTED_PROXIES = mkDefault (builtins.toJSON cfg.portal.trustedProxies);
+        PHOENIX_HTTP_WEB_PORT = mkDefault cfg.portal.port;
+        PHOENIX_HTTP_API_PORT = mkDefault 8081; # API endpoint on separate port
+        PHOENIX_SECURE_COOKIES = mkDefault true; # enforce HTTPS on cookies
       };
     }
-    (mkIf (!cfg.smtp.configureManually) {
+    (mkIf (cfg.enable && !cfg.smtp.configureManually) {
       services.firezone.server.settings = {
         OUTBOUND_EMAIL_ADAPTER = "Elixir.Swoosh.Adapters.Mua";
         OUTBOUND_EMAIL_ADAPTER_OPTS = builtins.toJSON { };
@@ -971,7 +1024,7 @@ in
         OUTBOUND_EMAIL_SMTP_PASSWORD = cfg.smtp.passwordFile;
       };
     })
-    (mkIf cfg.provision.enable {
+    (mkIf (cfg.enable && cfg.provision.enable) {
       # Load client secrets from authentication providers
       services.firezone.server.settingsSecret = flip concatMapAttrs cfg.provision.accounts (
         accountName: accountCfg:
@@ -984,12 +1037,12 @@ in
         )
       );
     })
-    (mkIf (cfg.openClusterFirewall && cfg.portal.enable) {
+    (mkIf (cfg.enable && cfg.openClusterFirewall) {
       networking.firewall.allowedTCPPorts = [
         cfg.settings.ERLANG_DISTRIBUTION_PORT
       ];
     })
-    (mkIf cfg.portal.enable {
+    (mkIf cfg.enable {
       systemd.slices.system-firezone = {
         description = "Firezone Slice";
       };
@@ -1016,7 +1069,7 @@ in
 
           echo "Running migrations"
           export RUN_MANUAL_MIGRATIONS="true"
-          ${getExe cfg.portal.package} eval Portal.Release.migrate
+          ${getExe cfg.package} eval Portal.Release.migrate
         '';
 
         # We use the portal environment to be able to run migrations
@@ -1027,7 +1080,7 @@ in
         };
       };
 
-      systemd.services.firezone-server-portal = {
+      systemd.services.firezone-server = {
         description = "Backend portal server for the Firezone zero-trust access platform";
         after = [ "firezone-initialize.service" ];
         bindsTo = [ "firezone-initialize.service" ];
@@ -1036,7 +1089,7 @@ in
 
         script = ''
           ${loadPortalSecretEnvironment}
-          exec ${getExe cfg.portal.package} start;
+          exec ${getExe cfg.package} start;
         '';
 
         path = [ pkgs.curl ];
@@ -1059,7 +1112,7 @@ in
 
           ${loadPortalSecretEnvironment}
           ln -sTf ${provisionStateJson} provision-state.json
-          ${getExe cfg.portal.package} rpc 'Code.eval_file("${./provision.exs}")'
+          ${getExe cfg.package} rpc 'Code.eval_file("${./provision.exs}")'
         '';
 
         environment = portalEnvironment;

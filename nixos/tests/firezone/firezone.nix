@@ -158,7 +158,7 @@ in
 
         specialisation.changeAttributes.configuration = {
           # Don't run token creation script in specialisations - tokens are already created
-          systemd.services.firezone-server-portal.postStart = lib.mkForce "";
+          systemd.services.firezone-server.postStart = lib.mkForce "";
 
           services.firezone.server.provision = lib.mkForce {
             enable = true;
@@ -226,7 +226,7 @@ in
 
         specialisation.removeResource.configuration = {
           # Don't run token creation script in specialisations - tokens are already created
-          systemd.services.firezone-server-portal.postStart = lib.mkForce "";
+          systemd.services.firezone-server.postStart = lib.mkForce "";
 
           services.firezone.server.provision = lib.mkForce {
             enable = true;
@@ -279,8 +279,8 @@ in
           };
         };
 
-        systemd.services.firezone-server-portal.postStart = lib.mkAfter ''
-          ${lib.getExe config.services.firezone.server.portal.package} rpc 'Code.eval_file("${./create-tokens.exs}")'
+        systemd.services.firezone-server.postStart = lib.mkAfter ''
+          ${lib.getExe config.services.firezone.server.package} rpc 'Code.eval_file("${./create-tokens.exs}")'
         '';
       };
 
@@ -465,7 +465,7 @@ in
       start_all()
 
       with subtest("Start server"):
-          server.wait_for_unit("firezone-server-portal.service")
+          server.wait_for_unit("firezone-server.service")
           server.wait_until_succeeds("curl -Lsf https://${domain} | grep 'Welcome to Firezone'")
           server.wait_until_succeeds("curl -Ls https://${domain}/api | grep 'Not Found'")
 
@@ -511,7 +511,7 @@ in
       with subtest("Test Provisioning - changeAttributes"):
           # Switch to changed configuration
           server.succeed('${specialisations}/changeAttributes/bin/switch-to-configuration test')
-          server.wait_for_unit("firezone-server-portal.service")
+          server.wait_for_unit("firezone-server.service")
 
           # Verify portal is still accessible
           server.wait_until_succeeds("curl -Lsf https://${domain} | grep 'Welcome to Firezone'")
@@ -524,7 +524,7 @@ in
       with subtest("Test Provisioning - removeResource"):
           # Switch to configuration with res1 removed
           server.succeed('${specialisations}/removeResource/bin/switch-to-configuration test')
-          server.wait_for_unit("firezone-server-portal.service")
+          server.wait_for_unit("firezone-server.service")
 
           # Verify portal is still accessible after removing a resource
           server.wait_until_succeeds("curl -Lsf https://${domain} | grep 'Welcome to Firezone'")
