@@ -10,11 +10,9 @@
   nodejs,
   tailwindcss_3,
   esbuild,
-
-  mixReleaseName ? "portal", # portal release (was "domain" in older versions)
 }:
 beamPackages.mixRelease rec {
-  pname = "firezone-server-${mixReleaseName}";
+  pname = "firezone-server";
   version = "0-unstable-2025-12-31";
 
   src = "${
@@ -68,7 +66,7 @@ beamPackages.mixRelease rec {
     nodejs
   ];
 
-  inherit mixReleaseName;
+  mixReleaseName = "portal";
 
   mixFodDeps = beamPackages.fetchMixDeps {
     pname = "mix-deps-${pname}-${version}";
@@ -88,7 +86,7 @@ beamPackages.mixRelease rec {
       oddlama
       patrickdag
     ];
-    mainProgram = mixReleaseName;
+    mainProgram = "portal";
     platforms = lib.platforms.linux;
   };
 }

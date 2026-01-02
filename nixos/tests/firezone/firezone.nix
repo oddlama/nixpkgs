@@ -156,6 +156,129 @@ in
           portal.externalUrl = "https://${domain}/";
         };
 
+        specialisation.changeAttributes.configuration = {
+          # Don't run token creation script in specialisations - tokens are already created
+          systemd.services.firezone-server-portal.postStart = lib.mkForce "";
+
+          services.firezone.server.provision = lib.mkForce {
+            enable = true;
+            accounts.main = {
+              name = "My Account (changed)";
+              gatewayGroups.site.name = "Site (changed)";
+              actors = {
+                admin = {
+                  type = "account_admin_user";
+                  name = "Admin (changed)";
+                  email = "admin@localhost.localdomain";
+                };
+                client = {
+                  type = "service_account";
+                  name = "A client (changed)";
+                };
+              };
+              groups.main = {
+                name = "main";
+                members = [
+                  "client"
+                  "admin"
+                ];
+              };
+              resources.res1 = {
+                type = "dns";
+                name = "Dns Resource (changed)";
+                address = "resource.example.com";
+                gatewayGroups = [ "site" ];
+                # Changed filters - only allow ICMP now
+                filters = [
+                  { protocol = "icmp"; }
+                ];
+              };
+              resources.res2 = {
+                type = "ip";
+                name = "Ip Resource (changed)";
+                address = "172.20.2.1";
+                gatewayGroups = [ "site" ];
+              };
+              resources.res3 = {
+                type = "cidr";
+                name = "Cidr Resource (changed)";
+                address = "172.20.1.0/24";
+                gatewayGroups = [ "site" ];
+              };
+              policies.pol1 = {
+                description = "Allow anyone res1 access (changed)";
+                group = "main";
+                resource = "res1";
+              };
+              policies.pol2 = {
+                description = "Allow anyone res2 access (changed)";
+                group = "main";
+                resource = "res2";
+              };
+              policies.pol3 = {
+                description = "Allow anyone res3 access (changed)";
+                group = "main";
+                resource = "res3";
+              };
+            };
+          };
+        };
+
+        specialisation.removeResource.configuration = {
+          # Don't run token creation script in specialisations - tokens are already created
+          systemd.services.firezone-server-portal.postStart = lib.mkForce "";
+
+          services.firezone.server.provision = lib.mkForce {
+            enable = true;
+            accounts.main = {
+              name = "My Account (changed)";
+              gatewayGroups.site.name = "Site (changed)";
+              actors = {
+                admin = {
+                  type = "account_admin_user";
+                  name = "Admin (changed)";
+                  email = "admin@localhost.localdomain";
+                };
+                client = {
+                  type = "service_account";
+                  name = "A client (changed)";
+                };
+              };
+              groups.main = {
+                name = "main";
+                members = [
+                  "client"
+                  "admin"
+                ];
+              };
+              # res1 removed
+              resources.res2 = {
+                type = "ip";
+                name = "Ip Resource (changed)";
+                address = "172.20.2.1";
+                gatewayGroups = [ "site" ];
+              };
+              resources.res3 = {
+                type = "cidr";
+                name = "Cidr Resource (changed)";
+                address = "172.20.1.0/24";
+                gatewayGroups = [ "site" ];
+              };
+              # pol1 removed (referenced removed resource)
+              policies.pol2 = {
+                description = "Allow anyone res2 access (changed)";
+                group = "main";
+                resource = "res2";
+              };
+              policies.pol3 = {
+                description = "Allow anyone res3 access (changed)";
+                group = "main";
+                resource = "res3";
+              };
+            };
+          };
+        };
+
         systemd.services.firezone-server-portal.postStart = lib.mkAfter ''
           ${lib.getExe config.services.firezone.server.portal.package} rpc 'Code.eval_file("${./create-tokens.exs}")'
         '';
@@ -334,7 +457,10 @@ in
   };
 
   testScript =
-    { ... }:
+    { nodes, ... }:
+    let
+      specialisations = "${nodes.server.system.build.toplevel}/specialisation";
+    in
     ''
       start_all()
 
@@ -380,6 +506,32 @@ in
 
       with subtest("Check IP based access"):
           # Check that we can access the resource through the VPN via IP
+          client.wait_until_succeeds("ping -c1 -W1 172.20.2.1")
+
+      with subtest("Test Provisioning - changeAttributes"):
+          # Switch to changed configuration
+          server.succeed('${specialisations}/changeAttributes/bin/switch-to-configuration test')
+          server.wait_for_unit("firezone-server-portal.service")
+
+          # Verify portal is still accessible
+          server.wait_until_succeeds("curl -Lsf https://${domain} | grep 'Welcome to Firezone'")
+
+          # Resources should still be accessible (changes require full reconnect to take effect)
+          # Just verify the system remains functional after configuration change
+          client.wait_until_succeeds("ping -c1 -W1 172.20.1.1")
+          client.wait_until_succeeds("ping -c1 -W1 172.20.2.1")
+
+      with subtest("Test Provisioning - removeResource"):
+          # Switch to configuration with res1 removed
+          server.succeed('${specialisations}/removeResource/bin/switch-to-configuration test')
+          server.wait_for_unit("firezone-server-portal.service")
+
+          # Verify portal is still accessible after removing a resource
+          server.wait_until_succeeds("curl -Lsf https://${domain} | grep 'Welcome to Firezone'")
+
+          # Remaining resources (res2 and res3) should continue to work
+          # (existing connections may still work until client reconnects)
+          client.wait_until_succeeds("ping -c1 -W1 172.20.1.1")
           client.wait_until_succeeds("ping -c1 -W1 172.20.2.1")
     '';
 }

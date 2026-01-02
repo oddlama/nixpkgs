@@ -30,7 +30,6 @@ let
     optionalAttrs
     optionalString
     recursiveUpdate
-    subtractLists
     toUpper
     types
     ;
@@ -71,8 +70,9 @@ let
       );
 
   # All non-secret environment variables for the portal
-  collectPortalEnvironment =
-    mapAttrs (_: v: if isBool v then boolToString v else toString v) cfg.settings;
+  portalEnvironment = mapAttrs (
+    _: v: if isBool v then boolToString v else toString v
+  ) cfg.settings;
 
   # All mandatory secrets which were not explicitly provided by the user will
   # have to be generated, if they do not yet exist.
@@ -186,21 +186,17 @@ let
 in
 {
   imports = [
-    (mkRemovedOptionModule
-      [ "services" "firezone" "server" "portal" "settings" ]
-      "Portal-specific settings have been merged into services.firezone.server.settings. Use that option instead.")
+    (mkRemovedOptionModule [ "services" "firezone" "server" "domain" ]
+      "The domain component has been merged into the portal component. All settings are now part of services.firezone.server directly."
+    )
 
-    (mkRemovedOptionModule
-      [ "services" "firezone" "server" "domain" ]
-      "The domain component has been merged into the portal component. Use services.firezone.server.portal instead.")
+    (mkRemovedOptionModule [ "services" "firezone" "server" "web" ]
+      "The web component has been merged into the portal component. All settings are now part of services.firezone.server directly."
+    )
 
-    (mkRemovedOptionModule
-      [ "services" "firezone" "server" "web" ]
-      "The web component has been merged into the portal component. Use services.firezone.server.portal instead.")
-
-    (mkRemovedOptionModule
-      [ "services" "firezone" "server" "api" ]
-      "The api component has been merged into the portal component. Use services.firezone.server.portal instead.")
+    (mkRemovedOptionModule [ "services" "firezone" "server" "api" ]
+      "The api component has been merged into the portal component. All settings are now part of services.firezone.server directly."
+    )
   ];
 
   options.services.firezone.server = {
@@ -1024,7 +1020,7 @@ in
         '';
 
         # We use the portal environment to be able to run migrations
-        environment = collectPortalEnvironment;
+        environment = portalEnvironment;
         serviceConfig = commonServiceConfig // {
           Type = "oneshot";
           RemainAfterExit = true;
@@ -1066,7 +1062,7 @@ in
           ${getExe cfg.portal.package} rpc 'Code.eval_file("${./provision.exs}")'
         '';
 
-        environment = collectPortalEnvironment;
+        environment = portalEnvironment;
         serviceConfig = commonServiceConfig;
       };
     })
