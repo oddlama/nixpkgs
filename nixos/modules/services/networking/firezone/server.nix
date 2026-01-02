@@ -26,6 +26,7 @@ let
     mkMerge
     mkOption
     mkPackageOption
+    mkRemovedOptionModule
     optionalAttrs
     optionalString
     recursiveUpdate
@@ -69,12 +70,9 @@ let
         }
       );
 
-  # All non-secret environment variables or the given component
-  collectEnvironment =
-    component:
-    mapAttrs (_: v: if isBool v then boolToString v else toString v) (
-      cfg.settings // cfg.${component}.settings
-    );
+  # All non-secret environment variables for the portal
+  collectPortalEnvironment =
+    mapAttrs (_: v: if isBool v then boolToString v else toString v) cfg.settings;
 
   # All mandatory secrets which were not explicitly provided by the user will
   # have to be generated, if they do not yet exist.
@@ -98,14 +96,10 @@ let
     );
 
   # All secrets given in `cfg.settingsSecret` must be loaded from a file and
-  # exported into the environment. Also exclude any variables that were
-  # overwritten by the local component settings.
-  loadSecretEnvironment =
-    component:
+  # exported into the environment.
+  loadPortalSecretEnvironment =
     let
-      relevantSecrets = subtractLists (attrNames cfg.${component}.settings) (
-        attrNames cfg.settingsSecret
-      );
+      relevantSecrets = attrNames cfg.settingsSecret;
     in
     concatLines (
       forEach relevantSecrets (
@@ -189,42 +183,28 @@ let
     RestartSec = 10;
   };
 
-  componentOptions = {
-    enable = mkEnableOption "the Firezone server";
-    package = mkPackageOption pkgs "firezone-server-portal" { };
-
-    settings = mkOption {
-      description = ''
-        Environment variables for the Firezone server. For a list of available
-        variables, please refer to the [upstream
-        definitions](https://github.com/firezone/firezone/blob/main/elixir/lib/portal/config/definitions.ex).
-        Some variables like `OUTBOUND_EMAIL_ADAPTER_OPTS` require json values
-        for which you can use `VAR = builtins.toJSON { /* ... */ }`.
-
-        This component will automatically inherit all variables defined via
-        {option}`services.firezone.server.settings` and
-        {option}`services.firezone.server.settingsSecret`, but which can be
-        overwritten by this option.
-      '';
-      default = { };
-      type = types.submodule {
-        freeformType = types.attrsOf (
-          types.oneOf [
-            types.bool
-            types.float
-            types.int
-            types.str
-            types.path
-            types.package
-          ]
-        );
-      };
-    };
-  };
 in
 {
+  imports = [
+    (mkRemovedOptionModule
+      [ "services" "firezone" "server" "portal" "settings" ]
+      "Portal-specific settings have been merged into services.firezone.server.settings. Use that option instead.")
+
+    (mkRemovedOptionModule
+      [ "services" "firezone" "server" "domain" ]
+      "The domain component has been merged into the portal component. Use services.firezone.server.portal instead.")
+
+    (mkRemovedOptionModule
+      [ "services" "firezone" "server" "web" ]
+      "The web component has been merged into the portal component. Use services.firezone.server.portal instead.")
+
+    (mkRemovedOptionModule
+      [ "services" "firezone" "server" "api" ]
+      "The api component has been merged into the portal component. Use services.firezone.server.portal instead.")
+  ];
+
   options.services.firezone.server = {
-    enable = mkEnableOption "all Firezone components";
+    enable = mkEnableOption "the Firezone portal server";
     enableLocalDB = mkEnableOption "a local postgresql database for Firezone";
     nginx.enable = mkEnableOption "nginx virtualhost definition";
 
@@ -232,10 +212,9 @@ in
       type = types.bool;
       default = false;
       description = ''
-        Opens up the erlang distribution port of all enabled components to
-        allow reaching the server cluster from the internet. You only need to
-        set this if you are actually distributing your cluster across multiple
-        machines.
+        Opens up the erlang distribution port of the portal to allow reaching
+        the server cluster from the internet. You only need to set this if you
+        are actually distributing your cluster across multiple machines.
       '';
     };
 
@@ -263,8 +242,7 @@ in
 
         Otherwise, this option is equivalent to
         {option}`services.firezone.server.settings`. Refer to the settings
-        option for more information regarding the actual variables and how
-        filtering rules are applied for each component.
+        option for more information regarding the actual variables.
       '';
       type = types.submodule {
         freeformType = types.attrsOf types.path;
@@ -274,13 +252,12 @@ in
             default = null;
             description = ''
               A file containing a unique secret identifier for the Erlang
-              cluster. All Firezone components in your cluster must use the
-              same value.
+              cluster. The Firezone portal in your cluster must use the same
+              value across all instances.
 
-              If this is `null`, a shared value will automatically be generated
-              on startup and used for all components on this machine. You do
-              not need to set this except when you spread your cluster over
-              multiple hosts.
+              If this is `null`, a value will automatically be generated on
+              startup. You do not need to set this except when you spread your
+              cluster over multiple hosts.
             '';
           };
 
@@ -289,13 +266,12 @@ in
             default = null;
             description = ''
               A file containing a unique base64 encoded secret for the
-              `TOKENS_KEY_BASE`. All Firezone components in your cluster must
-              use the same value.
+              `TOKENS_KEY_BASE`. The Firezone portal in your cluster must use
+              the same value across all instances.
 
-              If this is `null`, a shared value will automatically be generated
-              on startup and used for all components on this machine. You do
-              not need to set this except when you spread your cluster over
-              multiple hosts.
+              If this is `null`, a value will automatically be generated on
+              startup. You do not need to set this except when you spread your
+              cluster over multiple hosts.
             '';
           };
 
@@ -304,13 +280,12 @@ in
             default = null;
             description = ''
               A file containing a unique base64 encoded secret for the
-              `SECRET_KEY_BASE`. All Firezone components in your cluster must
-              use the same value.
+              `SECRET_KEY_BASE`. The Firezone portal in your cluster must use
+              the same value across all instances.
 
-              If this is `null`, a shared value will automatically be generated
-              on startup and used for all components on this machine. You do
-              not need to set this except when you spread your cluster over
-              multiple hosts.
+              If this is `null`, a value will automatically be generated on
+              startup. You do not need to set this except when you spread your
+              cluster over multiple hosts.
             '';
           };
 
@@ -319,13 +294,12 @@ in
             default = null;
             description = ''
               A file containing a unique base64 encoded secret for the
-              `TOKENS_SALT`. All Firezone components in your cluster must
-              use the same value.
+              `TOKENS_SALT`. The Firezone portal in your cluster must use the
+              same value across all instances.
 
-              If this is `null`, a shared value will automatically be generated
-              on startup and used for all components on this machine. You do
-              not need to set this except when you spread your cluster over
-              multiple hosts.
+              If this is `null`, a value will automatically be generated on
+              startup. You do not need to set this except when you spread your
+              cluster over multiple hosts.
             '';
           };
 
@@ -334,13 +308,12 @@ in
             default = null;
             description = ''
               A file containing a unique base64 encoded secret for the
-              `LIVE_VIEW_SIGNING_SALT`. All Firezone components in your cluster must
-              use the same value.
+              `LIVE_VIEW_SIGNING_SALT`. The Firezone portal in your cluster must
+              use the same value across all instances.
 
-              If this is `null`, a shared value will automatically be generated
-              on startup and used for all components on this machine. You do
-              not need to set this except when you spread your cluster over
-              multiple hosts.
+              If this is `null`, a value will automatically be generated on
+              startup. You do not need to set this except when you spread your
+              cluster over multiple hosts.
             '';
           };
 
@@ -349,13 +322,12 @@ in
             default = null;
             description = ''
               A file containing a unique base64 encoded secret for the
-              `COOKIE_SIGNING_SALT`. All Firezone components in your cluster must
-              use the same value.
+              `COOKIE_SIGNING_SALT`. The Firezone portal in your cluster must
+              use the same value across all instances.
 
-              If this is `null`, a shared value will automatically be generated
-              on startup and used for all components on this machine. You do
-              not need to set this except when you spread your cluster over
-              multiple hosts.
+              If this is `null`, a value will automatically be generated on
+              startup. You do not need to set this except when you spread your
+              cluster over multiple hosts.
             '';
           };
 
@@ -364,13 +336,12 @@ in
             default = null;
             description = ''
               A file containing a unique base64 encoded secret for the
-              `COOKIE_ENCRYPTION_SALT`. All Firezone components in your cluster must
-              use the same value.
+              `COOKIE_ENCRYPTION_SALT`. The Firezone portal in your cluster must
+              use the same value across all instances.
 
-              If this is `null`, a shared value will automatically be generated
-              on startup and used for all components on this machine. You do
-              not need to set this except when you spread your cluster over
-              multiple hosts.
+              If this is `null`, a value will automatically be generated on
+              startup. You do not need to set this except when you spread your
+              cluster over multiple hosts.
             '';
           };
         };
@@ -379,13 +350,10 @@ in
 
     settings = mkOption {
       description = ''
-        Environment variables for the Firezone server. For a list of available
-        variables, please refer to the [upstream definitions](https://github.com/firezone/firezone/blob/main/elixir/apps/domain/lib/domain/config/definitions.ex).
+        Environment variables for the Firezone portal server. For a list of available
+        variables, please refer to the [upstream definitions](https://github.com/firezone/firezone/blob/main/elixir/lib/portal/config/definitions.ex).
         Some variables like `OUTBOUND_EMAIL_ADAPTER_OPTS` require json values
         for which you can use `VAR = builtins.toJSON { /* ... */ }`.
-
-        Each component has an additional `settings` option which allows you to
-        override specific variables passed to that component.
       '';
       default = { };
       type = types.submodule {
@@ -459,7 +427,11 @@ in
       };
     };
 
-    portal = componentOptions // {
+    portal = {
+      enable = mkEnableOption "the Firezone portal server";
+
+      package = mkPackageOption pkgs "firezone-server-portal" { };
+
       externalUrl = mkOption {
         type = types.strMatching "^https://.+/$";
         example = "https://firezone.example.com/";
@@ -542,8 +514,13 @@ in
                       };
 
                       email = mkOption {
-                        type = types.str;
-                        description = "The email address used to authenticate as this account";
+                        type = types.nullOr types.str;
+                        default = null;
+                        description = ''
+                          The email address used to authenticate as this account.
+                          Required for account_user and account_admin_user types.
+                          Must be null for service_account and api_client types.
+                        '';
                       };
                     };
                   }
@@ -919,6 +896,13 @@ in
           {
             virtualHosts.${domain} = {
               forceSSL = mkDefault true;
+              # API endpoint for relay/gateway/client WebSockets
+              locations."${location}api/" = {
+                # The trailing slash is important to strip the location prefix from the request
+                proxyPass = "http://${cfg.portal.address}:8081/";
+                proxyWebsockets = true;
+              };
+              # Web UI and LiveView
               locations.${location} = {
                 # The trailing slash is important to strip the location prefix from the request
                 proxyPass = "http://${cfg.portal.address}:${toString cfg.portal.port}/";
@@ -933,8 +917,11 @@ in
     {
       services.firezone.server = {
         settings = {
+          # Erlang/OTP-specific variables (not in Portal config definitions but required by Erlang runtime)
           LOG_LEVEL = mkDefault "info";
           RELEASE_HOSTNAME = mkDefault "localhost.localdomain";
+          TZDATA_DIR = mkDefault "/var/lib/firezone/tzdata";
+          TELEMETRY_ENABLED = mkDefault false;
 
           ERLANG_CLUSTER_ADAPTER = mkDefault "Elixir.Cluster.Strategy.Epmd";
           ERLANG_CLUSTER_ADAPTER_CONFIG = mkDefault (
@@ -943,39 +930,33 @@ in
             }
           );
 
-          TZDATA_DIR = mkDefault "/var/lib/firezone/tzdata";
-          TELEMETRY_ENABLED = mkDefault false;
-
-          # By default this will open nproc * 2 connections for each component,
-          # which can exceeds the (default) maximum of 100 connections for
-          # postgresql on a 12 core +SMT machine. 16 connections will be
-          # sufficient for small to medium deployments
+          # By default this will open nproc * 2 connections, which can exceed the
+          # (default) maximum of 100 connections for postgresql on a 12 core +SMT
+          # machine. 16 connections will be sufficient for small to medium deployments
           DATABASE_POOL_SIZE = "16";
 
           AUTH_PROVIDER_ADAPTERS = mkDefault (concatStringsSep "," availableAuthAdapters);
 
-          FEATURE_FLOW_ACTIVITIES_ENABLED = mkDefault true;
+          # Feature flags
           FEATURE_POLICY_CONDITIONS_ENABLED = mkDefault true;
           FEATURE_MULTI_SITE_RESOURCES_ENABLED = mkDefault true;
-          FEATURE_SELF_HOSTED_RELAYS_ENABLED = mkDefault true;
           FEATURE_IDP_SYNC_ENABLED = mkDefault true;
           FEATURE_REST_API_ENABLED = mkDefault true;
           FEATURE_INTERNET_RESOURCE_ENABLED = mkDefault true;
-          FEATURE_TRAFFIC_FILTERS_ENABLED = mkDefault true;
-
           FEATURE_SIGN_UP_ENABLED = mkDefault (!cfg.provision.enable);
 
           WEB_EXTERNAL_URL = mkDefault cfg.portal.externalUrl;
-        };
+          # API endpoint (for relay/gateway/client WebSockets) uses /api/ path on same domain
+          API_EXTERNAL_URL = mkDefault "${cfg.portal.externalUrl}/api/";
 
-        portal.settings = {
+          # Portal-specific settings
           ERLANG_DISTRIBUTION_PORT = mkDefault 9000;
           HEALTH_PORT = mkDefault 4000;
           BACKGROUND_JOBS_ENABLED = mkDefault true;
-
           PHOENIX_LISTEN_ADDRESS = mkDefault cfg.portal.address;
           PHOENIX_EXTERNAL_TRUSTED_PROXIES = mkDefault (builtins.toJSON cfg.portal.trustedProxies);
           PHOENIX_HTTP_WEB_PORT = mkDefault cfg.portal.port;
+          PHOENIX_HTTP_API_PORT = mkDefault 8081; # API endpoint on separate port
           PHOENIX_SECURE_COOKIES = mkDefault true; # enforce HTTPS on cookies
         };
       };
@@ -1009,7 +990,7 @@ in
     })
     (mkIf (cfg.openClusterFirewall && cfg.portal.enable) {
       networking.firewall.allowedTCPPorts = [
-        cfg.portal.settings.ERLANG_DISTRIBUTION_PORT
+        cfg.settings.ERLANG_DISTRIBUTION_PORT
       ];
     })
     (mkIf cfg.portal.enable {
@@ -1035,7 +1016,7 @@ in
 
           # Generate and load secrets
           ${generateSecrets}
-          ${loadSecretEnvironment "portal"}
+          ${loadPortalSecretEnvironment}
 
           echo "Running migrations"
           export RUN_MANUAL_MIGRATIONS="true"
@@ -1043,7 +1024,7 @@ in
         '';
 
         # We use the portal environment to be able to run migrations
-        environment = collectEnvironment "portal";
+        environment = collectPortalEnvironment;
         serviceConfig = commonServiceConfig // {
           Type = "oneshot";
           RemainAfterExit = true;
@@ -1058,7 +1039,7 @@ in
         partOf = [ "firezone.target" ];
 
         script = ''
-          ${loadSecretEnvironment "portal"}
+          ${loadPortalSecretEnvironment}
           exec ${getExe cfg.portal.package} start;
         '';
 
@@ -1066,7 +1047,7 @@ in
         postStart = ''
           # Wait for the firezone server to come online
           count=0
-          while [[ "$(curl -s "http://localhost:${toString cfg.portal.settings.HEALTH_PORT}/healthz" 2>/dev/null || echo)" != '{"status":"ok"}' ]]
+          while [[ "$(curl -s "http://localhost:${toString cfg.settings.HEALTH_PORT}/healthz" 2>/dev/null || echo)" != '{"status":"ok"}' ]]
           do
             sleep 1
             if [[ "$count" -eq 30 ]]; then
@@ -1080,12 +1061,12 @@ in
           # Wait for server to fully come up. Not ideal to use sleep, but at least it works.
           sleep 1
 
-          ${loadSecretEnvironment "portal"}
+          ${loadPortalSecretEnvironment}
           ln -sTf ${provisionStateJson} provision-state.json
           ${getExe cfg.portal.package} rpc 'Code.eval_file("${./provision.exs}")'
         '';
 
-        environment = collectEnvironment "portal";
+        environment = collectPortalEnvironment;
         serviceConfig = commonServiceConfig;
       };
     })

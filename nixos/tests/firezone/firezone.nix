@@ -99,7 +99,7 @@ in
                 client = {
                   type = "service_account";
                   name = "A client";
-                  email = "client@example.com";
+                  # email removed - service_account type must not have email (type_is_valid constraint)
                 };
               };
               # service accounts aren't members of 'Everyone' so we need to add a separate group
