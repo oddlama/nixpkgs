@@ -128,8 +128,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_actor(uuid, _subject) do
-    case Repo.get(Actor, uuid) do
+  defp cleanup_actor(uuid, subject) do
+    case Repo.get_by(Actor, account_id: subject.account.id, id: uuid) do
       nil ->
         :ok
       actor ->
@@ -138,8 +138,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_provider(uuid, _subject) do
-    case Repo.get(AuthProvider, uuid) do
+  defp cleanup_provider(uuid, subject) do
+    case Repo.get_by(AuthProvider, account_id: subject.account.id, id: uuid) do
       nil ->
         :ok
       provider ->
@@ -148,8 +148,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_site(uuid, _subject) do
-    case Repo.get(Site, uuid) do
+  defp cleanup_site(uuid, subject) do
+    case Repo.get_by(Site, account_id: subject.account.id, id: uuid) do
       nil ->
         :ok
       site ->
@@ -158,8 +158,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_group(uuid, _subject) do
-    case Repo.get(Group, uuid) do
+  defp cleanup_group(uuid, subject) do
+    case Repo.get_by(Group, account_id: subject.account.id, id: uuid) do
       nil ->
         :ok
       group ->
@@ -168,8 +168,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_resource(uuid, _subject) do
-    case Repo.get(Resource, uuid) do
+  defp cleanup_resource(uuid, subject) do
+    case Repo.get_by(Resource, account_id: subject.account.id, id: uuid) do
       nil ->
         :ok
       resource ->
@@ -178,8 +178,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_policy(uuid, _subject) do
-    case Repo.get(Policy, uuid) do
+  defp cleanup_policy(uuid, subject) do
+    case Repo.get_by(Policy, account_id: subject.account.id, id: uuid) do
       nil ->
         :ok
       policy ->
@@ -404,7 +404,7 @@ defmodule Provision do
         Ecto.Multi.run(multi, {:actor, slug, external_id}, fn repo, changes ->
           {_, account} = changes[{:account, slug}]
           uuid = UuidMapping.get_entity(slug, "actors", external_id)
-          case uuid && Repo.get(Actor, uuid) do
+          case uuid && Repo.get_by(Actor, account_id: account.id, id: uuid) do
             nil ->
               Logger.info("Creating new actor #{actor_data["name"]}")
               actor_type = String.to_existing_atom(actor_data["type"])
@@ -439,9 +439,10 @@ defmodule Provision do
       # Provider management through JSON config is deprecated in the new Portal architecture
       # Providers should be created through the web interface or via direct database operations
       multi = Enum.reduce(account_data["auth"] || %{}, multi, fn {external_id, provider_data}, multi ->
-        Ecto.Multi.run(multi, {:provider, slug, external_id}, fn _repo, _changes ->
+        Ecto.Multi.run(multi, {:provider, slug, external_id}, fn _repo, changes ->
+          {_, account} = changes[{:account, slug}]
           uuid = UuidMapping.get_entity(slug, "providers", external_id)
-          case uuid && Repo.get(AuthProvider, uuid) do
+          case uuid && Repo.get_by(AuthProvider, account_id: account.id, id: uuid) do
             nil ->
               Logger.warning("Provider #{provider_data["name"]} not found. Provider creation through provision-state.json is no longer supported. Please create providers through the web interface.")
               {:ok, nil}
@@ -458,7 +459,7 @@ defmodule Provision do
         Ecto.Multi.run(multi, {:site, slug, external_id}, fn repo, changes ->
           {_, account} = changes[{:account, slug}]
           uuid = UuidMapping.get_entity(slug, "sites", external_id)
-          case uuid && Repo.get(Site, uuid) do
+          case uuid && Repo.get_by(Site, account_id: account.id, id: uuid) do
             nil ->
               Logger.info("Creating new site #{site_data["name"]}")
               site = %Site{
@@ -489,7 +490,7 @@ defmodule Provision do
         Ecto.Multi.run(multi, {:group, slug, external_id}, fn repo, changes ->
           {_, account} = changes[{:account, slug}]
           uuid = UuidMapping.get_entity(slug, "groups", external_id)
-          case uuid && Repo.get(Group, uuid) do
+          case uuid && Repo.get_by(Group, account_id: account.id, id: uuid) do
             nil ->
               Logger.info("Creating new group #{actor_group_data["name"]}")
               group = %Group{
@@ -581,7 +582,7 @@ defmodule Provision do
           }
 
           uuid = UuidMapping.get_entity(slug, "resources", external_id)
-          case uuid && Repo.get(Resource, uuid) do
+          case uuid && Repo.get_by(Resource, account_id: account.id, id: uuid) do
             nil ->
               Logger.info("Creating new resource #{resource_data["name"]}")
               resource = %Resource{account_id: account.id}
@@ -613,7 +614,7 @@ defmodule Provision do
           }
 
           uuid = UuidMapping.get_entity(slug, "policies", external_id)
-          case uuid && Repo.get(Policy, uuid) do
+          case uuid && Repo.get_by(Policy, account_id: account.id, id: uuid) do
             nil ->
               Logger.info("Creating new policy #{policy_data["name"]}")
               policy = %Policy{account_id: account.id}

@@ -170,7 +170,6 @@ let
     DynamicUser = true;
     User = "firezone";
 
-    Slice = "system-firezone.slice";
     StateDirectory = "firezone";
     WorkingDirectory = "/var/lib/firezone";
 
@@ -228,7 +227,7 @@ in
     )
     (mkRenamedOptionModule
       [ "services" "firezone" "server" "api" "port" ]
-      [ "services" "firezone" "server" "portal" "port" ]
+      [ "services" "firezone" "server" "portal" "apiPort" ]
     )
     (mkRemovedOptionModule [ "services" "firezone" "server" "api" "package" ]
       "The api component has been merged into the portal. Use services.firezone.server.package instead."
@@ -512,7 +511,13 @@ in
       port = mkOption {
         type = types.port;
         default = 8080;
-        description = "The port under which Firezone will be served locally";
+        description = "The port under which the Firezone portal will be served";
+      };
+
+      apiPort = mkOption {
+        type = types.port;
+        default = 8081;
+        description = "The port under which the Firezone API will be served";
       };
 
       trustedProxies = mkOption {
@@ -549,7 +554,6 @@ in
                   policy_conditions = mkFeatureOption "policy_conditions" true;
                   multi_site_resources = mkFeatureOption "multi_site_resources" true;
                   traffic_filters = mkFeatureOption "traffic_filters" true;
-                  self_hosted_relays = mkFeatureOption "self_hosted_relays" true;
                   idp_sync = mkFeatureOption "idp_sync" true;
                   rest_api = mkFeatureOption "rest_api" true;
                   internet_resource = mkFeatureOption "internet_resource" true;
@@ -950,7 +954,7 @@ in
               # API endpoint for relay/gateway/client WebSockets
               locations."${location}api/" = {
                 # The trailing slash is important to strip the location prefix from the request
-                proxyPass = "http://${cfg.portal.address}:8081/";
+                proxyPass = "http://${cfg.portal.address}:${toString cfg.portal.apiPort}/";
                 proxyWebsockets = true;
               };
               # Web UI and LiveView
@@ -1006,7 +1010,7 @@ in
         PHOENIX_LISTEN_ADDRESS = mkDefault cfg.portal.address;
         PHOENIX_EXTERNAL_TRUSTED_PROXIES = mkDefault (builtins.toJSON cfg.portal.trustedProxies);
         PHOENIX_HTTP_WEB_PORT = mkDefault cfg.portal.port;
-        PHOENIX_HTTP_API_PORT = mkDefault 8081; # API endpoint on separate port
+        PHOENIX_HTTP_API_PORT = mkDefault cfg.portal.apiPort;
         PHOENIX_SECURE_COOKIES = mkDefault true; # enforce HTTPS on cookies
       };
     }
@@ -1043,24 +1047,13 @@ in
       ];
     })
     (mkIf cfg.enable {
-      systemd.slices.system-firezone = {
-        description = "Firezone Slice";
-      };
-
-      systemd.targets.firezone = {
-        description = "Common target for all Firezone services.";
+      systemd.services.firezone-server = {
+        description = "Backend portal server for the Firezone zero-trust access platform";
         wantedBy = [ "multi-user.target" ];
-      };
+        after = mkIf cfg.enableLocalDB [ "postgresql.service" ];
+        requires = mkIf cfg.enableLocalDB [ "postgresql.service" ];
 
-      systemd.services.firezone-initialize = {
-        description = "Backend initialization service for the Firezone zero-trust access platform";
-
-        after = mkIf cfg.enableLocalDB [ "postgresql.target" ];
-        requires = mkIf cfg.enableLocalDB [ "postgresql.target" ];
-        wantedBy = [ "firezone.target" ];
-        partOf = [ "firezone.target" ];
-
-        script = ''
+        preStart = ''
           mkdir -p "$TZDATA_DIR"
 
           # Generate and load secrets
@@ -1068,24 +1061,9 @@ in
           ${loadPortalSecretEnvironment}
 
           echo "Running migrations"
-          export RUN_MANUAL_MIGRATIONS="true"
+          export RUN_MANUAL_MIGRATIONS=true
           ${getExe cfg.package} eval Portal.Release.migrate
         '';
-
-        # We use the portal environment to be able to run migrations
-        environment = portalEnvironment;
-        serviceConfig = commonServiceConfig // {
-          Type = "oneshot";
-          RemainAfterExit = true;
-        };
-      };
-
-      systemd.services.firezone-server = {
-        description = "Backend portal server for the Firezone zero-trust access platform";
-        after = [ "firezone-initialize.service" ];
-        bindsTo = [ "firezone-initialize.service" ];
-        wantedBy = [ "firezone.target" ];
-        partOf = [ "firezone.target" ];
 
         script = ''
           ${loadPortalSecretEnvironment}

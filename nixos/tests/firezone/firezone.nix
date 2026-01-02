@@ -88,7 +88,6 @@ in
             enable = true;
             accounts.main = {
               name = "My Account";
-              relayGroups.my-relays.name = "Relays";
               gatewayGroups.site.name = "Site";
               actors = {
                 admin = {
@@ -157,9 +156,6 @@ in
         };
 
         specialisation.changeAttributes.configuration = {
-          # Don't run token creation script in specialisations - tokens are already created
-          systemd.services.firezone-server.postStart = lib.mkForce "";
-
           services.firezone.server.provision = lib.mkForce {
             enable = true;
             accounts.main = {
@@ -225,9 +221,6 @@ in
         };
 
         specialisation.removeResource.configuration = {
-          # Don't run token creation script in specialisations - tokens are already created
-          systemd.services.firezone-server.postStart = lib.mkForce "";
-
           services.firezone.server.provision = lib.mkForce {
             enable = true;
             accounts.main = {
@@ -509,6 +502,11 @@ in
           client.wait_until_succeeds("ping -c1 -W1 172.20.2.1")
 
       with subtest("Test Provisioning - changeAttributes"):
+          # Stop services before switching configuration
+          client.succeed("systemctl stop firezone-headless-client")
+          gateway.succeed("systemctl stop firezone-gateway")
+          relay.succeed("systemctl stop firezone-relay")
+
           # Switch to changed configuration
           server.succeed('${specialisations}/changeAttributes/bin/switch-to-configuration test')
           server.wait_for_unit("firezone-server.service")
@@ -516,21 +514,61 @@ in
           # Verify portal is still accessible
           server.wait_until_succeeds("curl -Lsf https://${domain} | grep 'Welcome to Firezone'")
 
-          # Resources should still be accessible (changes require full reconnect to take effect)
-          # Just verify the system remains functional after configuration change
+          # Restart services to pick up new configuration
+          relay.succeed("systemctl start firezone-relay")
+          relay.wait_for_unit("firezone-relay.service")
+          relay.wait_until_succeeds("journalctl --since -2m --unit firezone-relay.service --grep 'Connected to portal.*${domain}'", timeout=30)
+
+          gateway.succeed("systemctl start firezone-gateway")
+          gateway.wait_for_unit("firezone-gateway.service")
+          gateway.wait_until_succeeds("journalctl --since -2m --unit firezone-gateway.service --grep 'Connected to portal.*${domain}'", timeout=30)
+
+          client.succeed("systemctl start firezone-headless-client")
+          client.wait_for_unit("firezone-headless-client.service")
+          client.wait_until_succeeds("journalctl --since -2m --unit firezone-headless-client.service --grep 'Tunnel ready'", timeout=30)
+
+          # Wait for both client and gateway to set up the updated resource configuration
+          client.wait_until_succeeds("journalctl --since -2m --unit firezone-headless-client.service --grep 'Activating resource.*Dns Resource .changed'", timeout=30)
+          gateway.wait_until_succeeds("journalctl --since -2m --unit firezone-gateway.service --grep 'Set up DNS resource NAT.*resource.example.com'", timeout=30)
+
+          # Test changed filters: res1 now only allows ICMP (no HTTP)
+          client.wait_until_succeeds("ping -c1 -W1 resource.example.com")
+          client.fail("curl -4 -Lsf --max-time 5 http://resource.example.com")
+
+          # Other resources should still work
           client.wait_until_succeeds("ping -c1 -W1 172.20.1.1")
           client.wait_until_succeeds("ping -c1 -W1 172.20.2.1")
 
       with subtest("Test Provisioning - removeResource"):
+          # Stop services before switching configuration
+          client.succeed("systemctl stop firezone-headless-client")
+          gateway.succeed("systemctl stop firezone-gateway")
+          relay.succeed("systemctl stop firezone-relay")
+
           # Switch to configuration with res1 removed
           server.succeed('${specialisations}/removeResource/bin/switch-to-configuration test')
           server.wait_for_unit("firezone-server.service")
 
-          # Verify portal is still accessible after removing a resource
+          # Verify portal is still accessible
           server.wait_until_succeeds("curl -Lsf https://${domain} | grep 'Welcome to Firezone'")
 
-          # Remaining resources (res2 and res3) should continue to work
-          # (existing connections may still work until client reconnects)
+          # Restart services to pick up new configuration
+          relay.succeed("systemctl start firezone-relay")
+          relay.wait_for_unit("firezone-relay.service")
+          relay.wait_until_succeeds("journalctl --since -2m --unit firezone-relay.service --grep 'Connected to portal.*${domain}'", timeout=30)
+
+          gateway.succeed("systemctl start firezone-gateway")
+          gateway.wait_for_unit("firezone-gateway.service")
+          gateway.wait_until_succeeds("journalctl --since -2m --unit firezone-gateway.service --grep 'Connected to portal.*${domain}'", timeout=30)
+
+          client.succeed("systemctl start firezone-headless-client")
+          client.wait_for_unit("firezone-headless-client.service")
+          client.wait_until_succeeds("journalctl --since -2m --unit firezone-headless-client.service --grep 'Tunnel ready'", timeout=30)
+
+          # res1 (DNS resource) should no longer be accessible
+          client.wait_until_fails("ping -c3 -W1 resource.example.com", timeout=30)
+
+          # res2 and res3 should still work
           client.wait_until_succeeds("ping -c1 -W1 172.20.1.1")
           client.wait_until_succeeds("ping -c1 -W1 172.20.2.1")
     '';
