@@ -495,11 +495,11 @@ in
 
       with subtest("Check CIDR based access"):
           # Check that we can access the resource through the VPN via CIDR
-          client.wait_until_succeeds("ping -c1 -W1 172.20.1.1")
+          client.wait_until_succeeds("ping -4 -c1 -W1 172.20.1.1")
 
       with subtest("Check IP based access"):
           # Check that we can access the resource through the VPN via IP
-          client.wait_until_succeeds("ping -c1 -W1 172.20.2.1")
+          client.wait_until_succeeds("ping -4 -c1 -W1 172.20.2.1")
 
       with subtest("Test Provisioning - changeAttributes"):
           # Stop services before switching configuration
@@ -532,12 +532,12 @@ in
           gateway.wait_until_succeeds("journalctl --since -2m --unit firezone-gateway.service --grep 'Set up DNS resource NAT.*resource.example.com'", timeout=30)
 
           # Test changed filters: res1 now only allows ICMP (no HTTP)
-          client.wait_until_succeeds("ping -c1 -W1 resource.example.com")
+          client.wait_until_succeeds("ping -4 -c1 -W1 resource.example.com")
           client.fail("curl -4 -Lsf --max-time 5 http://resource.example.com")
 
           # Other resources should still work
-          client.wait_until_succeeds("ping -c1 -W1 172.20.1.1")
-          client.wait_until_succeeds("ping -c1 -W1 172.20.2.1")
+          client.wait_until_succeeds("ping -4 -c1 -W1 172.20.1.1")
+          client.wait_until_succeeds("ping -4 -c1 -W1 172.20.2.1")
 
       with subtest("Test Provisioning - removeResource"):
           # Stop services before switching configuration
@@ -566,10 +566,10 @@ in
           client.wait_until_succeeds("journalctl --since -2m --unit firezone-headless-client.service --grep 'Tunnel ready'", timeout=30)
 
           # res1 (DNS resource) should no longer be accessible
-          client.wait_until_fails("ping -c3 -W1 resource.example.com", timeout=30)
+          client.wait_until_fails("ping -4 -c3 -W1 resource.example.com", timeout=30)
 
           # res2 and res3 should still work
-          client.wait_until_succeeds("ping -c1 -W1 172.20.1.1")
-          client.wait_until_succeeds("ping -c1 -W1 172.20.2.1")
+          client.wait_until_succeeds("ping -4 -c1 -W1 172.20.1.1")
+          client.wait_until_succeeds("ping -4 -c1 -W1 172.20.2.1")
     '';
 }

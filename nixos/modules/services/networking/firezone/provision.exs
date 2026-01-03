@@ -5,6 +5,13 @@ defmodule Provision do
   require Logger
   import Ecto.Query
 
+  # Helper for casting resource filters (matches Portal.Resource's private implementation)
+  defp filter_changeset(struct, attrs) do
+    struct
+    |> Ecto.Changeset.cast(attrs, [:protocol, :ports])
+    |> Ecto.Changeset.validate_required([:protocol])
+  end
+
   # UUID Mapping handling
   defmodule UuidMapping do
     @mapping_file "provision-uuids.json"
@@ -128,8 +135,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_actor(uuid, subject) do
-    case Repo.get_by(Actor, account_id: subject.account.id, id: uuid) do
+  defp cleanup_actor(uuid, account) do
+    case Repo.get_by(Actor, account_id: account.id, id: uuid) do
       nil ->
         :ok
       actor ->
@@ -138,8 +145,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_provider(uuid, subject) do
-    case Repo.get_by(AuthProvider, account_id: subject.account.id, id: uuid) do
+  defp cleanup_provider(uuid, account) do
+    case Repo.get_by(AuthProvider, account_id: account.id, id: uuid) do
       nil ->
         :ok
       provider ->
@@ -148,8 +155,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_site(uuid, subject) do
-    case Repo.get_by(Site, account_id: subject.account.id, id: uuid) do
+  defp cleanup_site(uuid, account) do
+    case Repo.get_by(Site, account_id: account.id, id: uuid) do
       nil ->
         :ok
       site ->
@@ -158,8 +165,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_group(uuid, subject) do
-    case Repo.get_by(Group, account_id: subject.account.id, id: uuid) do
+  defp cleanup_group(uuid, account) do
+    case Repo.get_by(Group, account_id: account.id, id: uuid) do
       nil ->
         :ok
       group ->
@@ -168,8 +175,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_resource(uuid, subject) do
-    case Repo.get_by(Resource, account_id: subject.account.id, id: uuid) do
+  defp cleanup_resource(uuid, account) do
+    case Repo.get_by(Resource, account_id: account.id, id: uuid) do
       nil ->
         :ok
       resource ->
@@ -178,8 +185,8 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_policy(uuid, subject) do
-    case Repo.get_by(Policy, account_id: subject.account.id, id: uuid) do
+  defp cleanup_policy(uuid, account) do
+    case Repo.get_by(Policy, account_id: account.id, id: uuid) do
       nil ->
         :ok
       policy ->
@@ -188,7 +195,7 @@ defmodule Provision do
     end
   end
 
-  defp cleanup_entity_type(account_slug, entity_type, cleanup_fn, temp_admin_subject) do
+  defp cleanup_entity_type(account_slug, entity_type, cleanup_fn, account) do
     # Get mapping for this entity type
     existing_entities = UuidMapping.get_entities(account_slug, entity_type)
     # Get current entities from account data
@@ -201,7 +208,7 @@ defmodule Provision do
       case existing_entities[entity_id] do
         nil -> :ok
         uuid ->
-          cleanup_fn.(uuid, temp_admin_subject)
+          cleanup_fn.(uuid, account)
           UuidMapping.remove_entity(account_slug, entity_type, entity_id)
       end
     end)
@@ -371,10 +378,10 @@ defmodule Provision do
           {:ok, create_temp_admin(account, email_provider)}
         end)
 
-      # Clean up removed entities for this account after we have an admin subject
+      # Clean up removed entities for this account
       multi = multi
         |> Ecto.Multi.run({:cleanup_entities, slug}, fn _repo, changes ->
-          {_temp_admin_subject, _temp_admin_actor} = changes[{:temp_admin, slug}]
+          {_, account} = changes[{:account, slug}]
 
           # Store current entities in process dictionary for our helper function
           current_entities = collect_current_entities(account_data)
@@ -393,7 +400,7 @@ defmodule Provision do
 
           # Clean up each entity type
           Enum.each(entity_types, fn {entity_type, cleanup_fn} ->
-            cleanup_entity_type(slug, entity_type, cleanup_fn, nil)
+            cleanup_entity_type(slug, entity_type, cleanup_fn, account)
           end)
 
           {:ok, :cleaned}
@@ -574,8 +581,12 @@ defmodule Provision do
             address_description: resource_data["address_description"],
             site_id: site_id,
             filters: Enum.map(resource_data["filters"] || [], fn filter ->
+              # Convert port integers to strings as required by Portal.Types.Int4Range
+              ports = Enum.map(filter["ports"] || [], fn port ->
+                if is_integer(port), do: Integer.to_string(port), else: port
+              end)
               %{
-                ports: filter["ports"] || [],
+                ports: ports,
                 protocol: String.to_existing_atom(filter["protocol"])
               }
             end)
@@ -586,7 +597,8 @@ defmodule Provision do
             nil ->
               Logger.info("Creating new resource #{resource_data["name"]}")
               resource = %Resource{account_id: account.id}
-                |> Ecto.Changeset.change(resource_attrs)
+                |> Ecto.Changeset.cast(resource_attrs, [:type, :name, :address, :address_description, :site_id])
+                |> Ecto.Changeset.cast_embed(:filters, with: &filter_changeset/2)
                 |> Resource.changeset()
                 |> repo.insert!()
               UuidMapping.update_entities(slug, "resources", %{external_id => resource.id})
@@ -594,7 +606,8 @@ defmodule Provision do
             existing ->
               Logger.info("Updating existing resource #{resource_data["name"]}")
               updated_resource = existing
-                |> Ecto.Changeset.change(resource_attrs)
+                |> Ecto.Changeset.cast(resource_attrs, [:type, :name, :address, :address_description, :site_id])
+                |> Ecto.Changeset.cast_embed(:filters, with: &filter_changeset/2)
                 |> Resource.changeset()
                 |> repo.update!()
               {:ok, updated_resource}
