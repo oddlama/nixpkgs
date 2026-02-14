@@ -62,6 +62,24 @@ let
     isConvertibleWithToString
     ;
 
+  # Make an attrset tracked recursively up to a certain depth.
+  # This enables dependency tracking at multiple levels of config.
+  # e.g., config.services.nginx.enable accesses are tracked.
+  # The path argument records the attribute path prefix so that
+  # dependency information contains full paths.
+  makeTrackedRecursive =
+    path: value:
+    if !(isAttrs value) then
+      value
+    else if isOption value then
+      value  # Don't wrap option declarations
+    else if builtins ? makeTracked then
+      builtins.makeTracked
+        (mapAttrs (name: makeTrackedRecursive (path ++ [ name ])) value)
+        path
+    else
+      value;
+
   showDeclPrefix =
     loc: decl: prefix:
     " - option(s) with prefix `${showOption (loc ++ [ prefix ])}' in module `${decl._file}'";
@@ -248,6 +266,12 @@ let
       # This function takes an empty attrset as an argument.
       # It could theoretically be replaced with its body,
       # but such a binding is avoided to allow for earlier grabage collection.
+      # The raw config with error context
+      rawConfig = addErrorContext "if you get an infinite recursion here, you probably reference `config` in `imports`. If you are trying to achieve a conditional import behavior dependent on `config`, consider importing unconditionally, and using `mkEnableOption` and `mkIf` to control its effect." config;
+
+      # Wrap config in tracking to record which attributes modules access.
+      trackedConfig = makeTrackedRecursive [] rawConfig;
+
       doCollect =
         { }:
         collectModules class (specialArgs.modulesPath or "") (regularModules ++ [ internalModule ]) (
@@ -259,7 +283,7 @@ let
               ;
             _class = class;
             _prefix = prefix;
-            config = addErrorContext "if you get an infinite recursion here, you probably reference `config` in `imports`. If you are trying to achieve a conditional import behavior dependent on `config`, consider importing unconditionally, and using `mkEnableOption` and `mkIf` to control its effect." config;
+            config = trackedConfig;
           }
           // specialArgs
         );
@@ -362,6 +386,25 @@ let
         _module = checked (config._module);
         inherit (doCollect { }) graph;
         inherit extendModules type class;
+
+        # Query dependencies for a config path.
+        # Forces the value first to ensure dependencies are recorded,
+        # then queries provenance from the tracked config attrset.
+        # Usage: result.getConfigDependencies ["services" "nginx" "enable"]
+        getConfigDependencies = path:
+          if !(builtins ? getAttrProvenance && builtins ? isTracked) then
+            null
+          else
+            let
+              parentPath = lib.init path;
+              attrName = lib.last path;
+              parent = lib.attrByPath parentPath null trackedConfig;
+              # Force the value via the tracked config so dependencies are recorded
+              val = lib.attrByPath path null trackedConfig;
+            in
+            if parent == null then null
+            else if !(builtins.isTracked parent) then null
+            else builtins.seq val (builtins.getAttrProvenance parent attrName);
       };
     in
     result;
