@@ -31,6 +31,8 @@ evalConfigArgs@{
   prefix ? [ ],
   lib ? import ../../lib,
   extraModules ? [ ],
+  # Enable dependency tracking for config accesses
+  trackDependencies ? false,
 }:
 
 let
@@ -105,7 +107,7 @@ let
     locatedModules ++ legacyModules;
 
   noUserModules = evalModulesMinimal {
-    inherit prefix specialArgs;
+    inherit prefix specialArgs trackDependencies;
     modules =
       baseModules
       ++ extraModules

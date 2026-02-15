@@ -113,6 +113,28 @@ let
       trackDependencies ? false,
     }:
     let
+      # Create tracking scope for dependency tracking (if enabled and builtins support it)
+      trackingEnabled = trackDependencies && builtins ? createTrackingScope;
+      trackingScopeId = if trackingEnabled then builtins.createTrackingScope else null;
+
+      # Tag a value with its option path for dependency tracking
+      tagOptionValue = loc: value:
+        if trackingEnabled && builtins ? tagThunkOrigin then
+          builtins.tagThunkOrigin trackingScopeId loc value
+        else
+          value;
+
+      # Recursively tag all option values in the options tree with their paths
+      # This enables dependency tracking: when an option's value is forced,
+      # any accesses to the tracked config will be attributed to that option.
+      tagOptionsRecursive = pfx: opts:
+        mapAttrs (name: opt:
+          let loc = pfx ++ [ name ];
+          in if isOption opt
+             then opt // { value = tagOptionValue loc opt.value; }
+             else tagOptionsRecursive loc opt
+        ) opts;
+
       withWarnings =
         x:
         warnIf (evalModulesArgs ? args)
@@ -279,7 +301,10 @@ let
 
       merged = mergeModules prefix (reverseList (doCollect { }).modules);
 
-      options = merged.matchedOptions;
+      # Tag option values for dependency tracking if enabled
+      options = if trackingEnabled
+                then tagOptionsRecursive prefix merged.matchedOptions
+                else merged.matchedOptions;
 
       config =
         let
@@ -401,19 +426,39 @@ let
         inherit modules specialArgs class;
       };
 
+      # For tracking: register config before any options are evaluated.
+      # This returns the scopeId (so it can be used to confirm registration happened).
+      trackingRegistration =
+        if trackingEnabled
+        then builtins.registerTrackedAttrset trackingScopeId config
+        else null;
+
+      # The exposed config forces tracking registration first (if enabled).
+      # This ensures the config attrset is tracked before any option access.
+      exposedConfig =
+        let rawExposed = removeAttrs config [ "_module" ];
+        in if trackingEnabled
+           then builtins.seq trackingRegistration rawExposed
+           else rawExposed;
+
       result = withWarnings ({
         _type = "configuration";
         options = checked options;
-        config = checked (removeAttrs config [ "_module" ]);
+        config = checked exposedConfig;
         _module = checked (config._module);
         inherit (doCollect { }) graph;
         inherit extendModules type class;
-      } // lib.optionalAttrs trackDependencies {
-        # Provide access to the raw config for manual dependency tracking.
-        # This is needed because the exposed `config` goes through removeAttrs
-        # which creates a new Bindings* that won't match what modules access.
+      } // lib.optionalAttrs trackingEnabled {
+        # Dependency tracking interface.
+        # When trackDependencies is enabled and the required builtins are available,
+        # this provides functions to query option dependencies.
         _dependencyTracking = {
+          # The raw config (internal, includes _module)
           rawConfig = config;
+          # The scope ID for this evaluation
+          scopeId = trackingScopeId;
+          # Get all recorded dependencies after evaluation
+          getDependencies = builtins.getDependencies trackingScopeId;
         };
       });
     in
