@@ -189,6 +189,7 @@ let
       inherit (self.fixedPoints)
         fix
         fix'
+        fixWithTracking
         converge
         extends
         composeExtensions

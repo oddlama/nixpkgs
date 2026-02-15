@@ -107,6 +107,10 @@ let
       args ? { },
       # This would be remove in the future, Prefer _module.check option instead.
       check ? true,
+      # Enable dependency tracking for config accesses.
+      # When true, the result will include a `_dependencyTracking` attribute
+      # with functions to query option dependencies.
+      trackDependencies ? false,
     }:
     let
       withWarnings =
@@ -397,14 +401,47 @@ let
         inherit modules specialArgs class;
       };
 
-      result = withWarnings {
+      # Function to get dependencies for a specific option path
+      # This uses builtins.withDependencyTracking to track accesses
+      # when forcing the option value.
+      getOptionDependencies = path:
+        let
+          # Track accesses to config during evaluation.
+          # The new 2-argument API: path and attrset.
+          # It navigates to path within the attrset and tracks dependencies.
+          tracked = builtins.withDependencyTracking path config;
+
+          # Filter out self-references only
+          realDeps = builtins.filter
+            (d: d.accessor != d.accessed)
+            tracked.dependencies;
+        in {
+          value = tracked.value;
+          dependencies = realDeps;
+        };
+
+      # Build dependency tree for all tracked options
+      buildDependencyTree = paths:
+        lib.listToAttrs (map (p: {
+          name = concatStringsSep "." p;
+          value = getOptionDependencies p;
+        }) paths);
+
+      result = withWarnings ({
         _type = "configuration";
         options = checked options;
         config = checked (removeAttrs config [ "_module" ]);
         _module = checked (config._module);
         inherit (doCollect { }) graph;
         inherit extendModules type class;
-      };
+      } // lib.optionalAttrs trackDependencies {
+        # Dependency tracking functions
+        _dependencyTracking = {
+          inherit getOptionDependencies buildDependencyTree;
+          # Get config for manual tracking
+          rawConfig = config;
+        };
+      });
     in
     result;
 
