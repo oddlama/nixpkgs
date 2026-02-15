@@ -401,32 +401,6 @@ let
         inherit modules specialArgs class;
       };
 
-      # Function to get dependencies for a specific option path
-      # This uses builtins.withDependencyTracking to track accesses
-      # when forcing the option value.
-      getOptionDependencies = path:
-        let
-          # Track accesses to config during evaluation.
-          # The new 2-argument API: path and attrset.
-          # It navigates to path within the attrset and tracks dependencies.
-          tracked = builtins.withDependencyTracking path config;
-
-          # Filter out self-references only
-          realDeps = builtins.filter
-            (d: d.accessor != d.accessed)
-            tracked.dependencies;
-        in {
-          value = tracked.value;
-          dependencies = realDeps;
-        };
-
-      # Build dependency tree for all tracked options
-      buildDependencyTree = paths:
-        lib.listToAttrs (map (p: {
-          name = concatStringsSep "." p;
-          value = getOptionDependencies p;
-        }) paths);
-
       result = withWarnings ({
         _type = "configuration";
         options = checked options;
@@ -435,10 +409,10 @@ let
         inherit (doCollect { }) graph;
         inherit extendModules type class;
       } // lib.optionalAttrs trackDependencies {
-        # Dependency tracking functions
+        # Provide access to the raw config for manual dependency tracking.
+        # This is needed because the exposed `config` goes through removeAttrs
+        # which creates a new Bindings* that won't match what modules access.
         _dependencyTracking = {
-          inherit getOptionDependencies buildDependencyTree;
-          # Get config for manual tracking
           rawConfig = config;
         };
       });

@@ -97,31 +97,6 @@ rec {
     x;
 
   /**
-    Like `fix`, but enables dependency tracking between attributes.
-
-    Returns an attrset that can be used with `builtins.getAttrWithTracking`
-    to retrieve both the value and a list of dependencies.
-
-    # Example
-
-    ```nix
-    let
-      tracked = fixWithTracking (self: {
-        a = 1;
-        b = self.a + 1;
-        c = self.a + self.b;
-      });
-    in builtins.getAttrWithTracking ["c"] tracked
-    => { value = 3; dependencies = [ { accessor = ["c"]; accessed = ["a"]; } { accessor = ["c"]; accessed = ["b"]; } ... ]; }
-    ```
-  */
-  fixWithTracking =
-    f:
-    if builtins ? fixWithTracking
-    then builtins.fixWithTracking f
-    else fix f;  # Fallback to regular fix if builtin not available
-
-  /**
     A variant of `fix` that records the original recursive attribute set in the
     result, in an attribute named `__unfix__`.
 
