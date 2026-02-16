@@ -301,9 +301,19 @@ let
 
       merged = mergeModules prefix (reverseList (doCollect { }).modules);
 
-      # Tag option values for dependency tracking if enabled
+      # Tag option values for dependency tracking if enabled.
+      # We also tag the merged option tree itself with an empty-prefix
+      # origin so that config accesses during option declaration
+      # processing (e.g., mkKubeConfigOptions) are tracked under the
+      # same paths as the option values themselves.
+      # Additionally, register options as a tracked attrset so that
+      # accesses through the options tree (e.g., doRename accessing
+      # options.old.path) generate dependency edges.
       options = if trackingEnabled
-                then tagOptionsRecursive prefix merged.matchedOptions
+                then let
+                  taggedMatchedOptions = builtins.tagThunkOrigin trackingScopeId [] merged.matchedOptions;
+                  rawOptions = tagOptionsRecursive prefix taggedMatchedOptions;
+                in builtins.seq (builtins.registerTrackedAttrset trackingScopeId rawOptions) rawOptions
                 else merged.matchedOptions;
 
       config =
@@ -435,10 +445,14 @@ let
 
       # The exposed config forces tracking registration first (if enabled).
       # This ensures the config attrset is tracked before any option access.
+      # We register BOTH the internal and exposed config so that tracking works
+      # regardless of which config attrset is accessed (internal by modules,
+      # exposed by external users).
       exposedConfig =
         let rawExposed = removeAttrs config [ "_module" ];
         in if trackingEnabled
-           then builtins.seq trackingRegistration rawExposed
+           then builtins.seq trackingRegistration
+                  (builtins.seq (builtins.registerTrackedAttrset trackingScopeId rawExposed) rawExposed)
            else rawExposed;
 
       result = withWarnings ({
