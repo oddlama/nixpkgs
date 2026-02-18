@@ -82,6 +82,8 @@ let
       ''
       x;
 
+  processDependencyTracking = import ./dependency-tracking.nix { inherit lib; };
+
   legacyModules =
     lib.optional (evalConfigArgs ? extraArgs) {
       config = {
@@ -141,6 +143,9 @@ let
       inherit (configuration._module.args) pkgs;
       inherit lib;
       extendModules = args: withExtraAttrs (configuration.extendModules args);
+    }
+    // lib.optionalAttrs (configuration ? _dependencyTracking) {
+      dependencyTracking = processDependencyTracking configuration;
     };
 in
 withWarnings (withExtraAttrs nixosWithUserModules)
