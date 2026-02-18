@@ -337,55 +337,110 @@ let
       else
         value; # int, float, bool, null pass through
 
-  configValues =
+  _missing = { _isMissing = true; };
+
+  # Evaluate a single leaf path to a sanitized value, or _missing on failure.
+  # Uses tryCatchAll (catches ALL errors) when available, falls back to tryEval.
+  evalLeaf = path:
     let
-      _missing = { _isMissing = true; };
-
-      # Evaluate a single leaf path to a sanitized value, or _missing on failure.
-      # Uses tryCatchAll (catches ALL errors) when available, falls back to tryEval.
-      evalLeaf = path:
+      doEval =
         let
-          doEval =
-            let
-              val = lib.attrByPath path _missing config;
-            in
-            if val == _missing then _missing else sanitizeValue 5 val;
-          evalResult =
-            if hasTryCatchAll
-            then builtins.tryCatchAll doEval
-            else builtins.tryEval doEval;
+          val = lib.attrByPath path _missing config;
         in
-        if evalResult.success && evalResult.value != _missing
-        then evalResult.value
-        else _missing;
+        if val == _missing then _missing else sanitizeValue 5 val;
+      evalResult =
+        if hasTryCatchAll
+        then builtins.tryCatchAll doEval
+        else builtins.tryEval doEval;
+    in
+    if evalResult.success && evalResult.value != _missing
+    then evalResult.value
+    else _missing;
 
-      # Build a nested attrset from { path; value; } entries by grouping
-      # on first path component and recursing (avoids stack overflow from
-      # foldl' + recursiveUpdate with thousands of paths).
-      buildTree = entries:
-        let
-          leaves = builtins.filter (e: builtins.length e.path == 1) entries;
-          branches = builtins.filter (e: builtins.length e.path > 1) entries;
-          grouped = builtins.groupBy (e: builtins.head e.path) branches;
-          subTrees = builtins.mapAttrs (_: subEntries:
-            buildTree (map (e: {
-              path = builtins.tail e.path;
-              inherit (e) value;
-            }) subEntries)
-          ) grouped;
-          leafAttrs = builtins.listToAttrs (map (e: {
-            name = builtins.head e.path;
-            inherit (e) value;
-          }) leaves);
-        in
-        leafAttrs // subTrees;
+  # Build a nested attrset from { path; value; } entries by grouping
+  # on first path component and recursing (avoids stack overflow from
+  # foldl' + recursiveUpdate with thousands of paths).
+  buildTree = entries:
+    let
+      leaves = builtins.filter (e: builtins.length e.path == 1) entries;
+      branches = builtins.filter (e: builtins.length e.path > 1) entries;
+      grouped = builtins.groupBy (e: builtins.head e.path) branches;
+      subTrees = builtins.mapAttrs (_: subEntries:
+        buildTree (map (e: {
+          path = builtins.tail e.path;
+          inherit (e) value;
+        }) subEntries)
+      ) grouped;
+      leafAttrs = builtins.listToAttrs (map (e: {
+        name = builtins.head e.path;
+        inherit (e) value;
+      }) leaves);
+    in
+    leafAttrs // subTrees;
 
+  # Build configValues from a list of leaf node paths.
+  buildConfigValues = leaves:
+    let
       entries = builtins.concatMap (path:
         let val = evalLeaf path;
         in if val != _missing then [{ inherit path; value = val; }] else []
-      ) leafNodes;
+      ) leaves;
     in
     buildTree entries;
+
+  configValues = buildConfigValues leafNodes;
+
+  # =========================================================================
+  # 10. Explicit definition filtering
+  # =========================================================================
+
+  # Check if a leaf path represents an explicitly defined value.
+  # - Direct option paths: checks option.isDefined
+  # - Sub-paths of container options (attrsOf, etc.): checks if any
+  #   definition of the parent option includes the sub-path.  This filters
+  #   out sub-option defaults that were never set by any module.
+  #
+  # The entire check is wrapped in tryCatchAll/tryEval because accessing
+  # option.definitions can trigger evaluation cascades (e.g., discharging
+  # mkIf conditions) that may throw on unrelated options.
+  isExplicitlyDefined = path:
+    let
+      len = builtins.length path;
+      longestMatch = builtins.foldl'
+        (best: i: if optionPathSet ? ${pathKey (lib.take i path)} then i else best)
+        0
+        (lib.range 1 len);
+      doCheck =
+        if longestMatch == 0 then
+          true  # Not under any known option (e.g., pkgs refs) — keep
+        else if longestMatch == len then
+          # Direct option path — check if it has any definitions
+          let opt = lib.attrByPath path null options;
+          in opt != null && (opt.isDefined or false)
+        else
+          # Sub-path of a container option (e.g., users.users.vaultwarden.isSystemUser)
+          # Check if any definition of the parent option includes this sub-path.
+          # Definitions contain the raw values from modules (after mkIf/mkMerge
+          # processing), so sub-option defaults from the submodule declaration
+          # do NOT appear here — only attributes explicitly set by modules.
+          let
+            optionPath = lib.take longestMatch path;
+            subPath = lib.drop longestMatch path;
+            opt = lib.attrByPath optionPath null options;
+          in
+          opt != null
+          && builtins.any (defValue:
+            lib.hasAttrByPath subPath defValue
+          ) (opt.definitions or []);
+      res = if hasTryCatchAll
+        then builtins.tryCatchAll doCheck
+        else builtins.tryEval doCheck;
+    in
+    res.success && res.value;
+
+  explicitLeafNodes = builtins.filter isExplicitlyDefined leafNodes;
+
+  explicitConfigValues = buildConfigValues explicitLeafNodes;
 
 # =========================================================================
 # Public interface
@@ -399,10 +454,14 @@ in
   inherit filteredDeps;
 
   # Kept and leaf node path lists
-  inherit keptNodes leafNodes;
+  inherit keptNodes leafNodes explicitLeafNodes;
 
   # Nested attrset of serialized config values for leaf nodes (JSON-safe)
   inherit configValues;
+
+  # Like configValues, but only includes options that were explicitly defined
+  # by a module (filters out sub-option defaults in attrsOf/submodule types)
+  inherit explicitConfigValues;
 
   # DOT graph of all raw dependencies
   rawDotOutput = makeDotOutput rawDeps;
@@ -420,5 +479,6 @@ in
     options = builtins.length collectOptionPaths;
     keptNodes = builtins.length keptNodes;
     leafNodes = builtins.length leafNodes;
+    explicitLeafNodes = builtins.length explicitLeafNodes;
   };
 }
