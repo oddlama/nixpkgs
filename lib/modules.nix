@@ -127,11 +127,21 @@ let
       # Recursively tag all option values in the options tree with their paths
       # This enables dependency tracking: when an option's value is forced,
       # any accesses to the tracked config will be attributed to that option.
+      #
+      # We use tagAttrThunkOrigin to tag the .value attribute's thunk
+      # directly within the option record's Bindings. This avoids creating
+      # a wrapper thunk (which would happen with { value = tagThunkOrigin ... })
+      # that auto-registration would incorrectly tag with ["opt","path","value"]
+      # instead of the correct ["opt","path"].
       tagOptionsRecursive = pfx: opts:
         mapAttrs (name: opt:
           let loc = pfx ++ [ name ];
           in if isOption opt
-             then opt // { value = tagOptionValue loc opt.value; }
+             then
+               if trackingEnabled && builtins ? tagAttrThunkOrigin then
+                 builtins.tagAttrThunkOrigin trackingScopeId loc "value" opt
+               else
+                 opt
              else tagOptionsRecursive loc opt
         ) opts;
 
