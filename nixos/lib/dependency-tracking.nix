@@ -32,9 +32,16 @@ let
   # 1. Raw dependency deduplication
   # =========================================================================
 
+  # Force the inner system.build.toplevel before snapshotting dependencies.
+  # This triggers evaluation of all NixOS options, ensuring getDependencies
+  # returns complete data.  The `configuration` received here is the raw
+  # evalModules result (before eval-config.nix's withExtraAttrs overrides),
+  # so this is always the *inner* toplevel — no infinite recursion.
+  innerToplevel = configuration.config.system.build.toplevel;
+
   rawDeps =
     let
-      raw = tracking.getDependencies;
+      raw = builtins.seq innerToplevel tracking.getDependencies;
       edgeKey = dep: builtins.toJSON [ dep.accessor dep.accessed ];
       grouped = builtins.groupBy edgeKey raw;
     in
@@ -468,6 +475,32 @@ in
 
   # DOT graph of filtered dependencies (with section colors and Nix-style paths)
   inherit (let dot = makeDotOutput filteredDeps; in { filteredDotOutput = dot; }) filteredDotOutput;
+
+  # Creates a wrapper derivation containing the original toplevel + tracking JSON.
+  # builtins.seq forces toplevel evaluation first (recording all dependencies),
+  # then serializes the tracking data into the wrapper.
+  #
+  # Usage:
+  #   nixos.dependencyTracking.mkTrackedToplevel {
+  #     inherit (nixos) pkgs;
+  #     toplevel = nixos.config.system.build.toplevel;
+  #   }
+  mkTrackedToplevel = { pkgs, toplevel }:
+    let
+      discard = builtins.unsafeDiscardStringContext;
+      explicitJson = builtins.toFile "nixos-tracking-explicit.json"
+        (discard (builtins.toJSON explicitConfigValues));
+      fullJson = builtins.toFile "nixos-tracking-full.json"
+        (discard (builtins.toJSON configValues));
+    in
+    pkgs.runCommand "nixos-toplevel-tracked" {} ''
+      mkdir $out
+      for f in ${toplevel}/*; do
+        ln -s "$f" "$out/$(basename "$f")"
+      done
+      ln -s ${fullJson} $out/tracking.json
+      ln -s ${explicitJson} $out/tracking-explicit.json
+    '';
 
   # Path formatting utility
   inherit formatPath;

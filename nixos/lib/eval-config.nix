@@ -144,8 +144,27 @@ let
       inherit lib;
       extendModules = args: withExtraAttrs (configuration.extendModules args);
     }
-    // lib.optionalAttrs (configuration ? _dependencyTracking) {
-      dependencyTracking = processDependencyTracking configuration;
-    };
+    // lib.optionalAttrs (configuration ? _dependencyTracking) (
+      let
+        tracking = processDependencyTracking configuration;
+        wrappedToplevel = tracking.mkTrackedToplevel {
+          inherit (configuration._module.args) pkgs;
+          toplevel = configuration.config.system.build.toplevel;
+        };
+      in {
+        dependencyTracking = tracking;
+        # Override config so config.system.build.toplevel transparently
+        # returns the wrapper that includes tracking.json.  The inner
+        # (real) toplevel is evaluated first via builtins.seq inside
+        # mkTrackedToplevel, so there is no infinite recursion.
+        config = configuration.config // {
+          system = configuration.config.system // {
+            build = configuration.config.system.build // {
+              toplevel = wrappedToplevel;
+            };
+          };
+        };
+      }
+    );
 in
 withWarnings (withExtraAttrs nixosWithUserModules)
