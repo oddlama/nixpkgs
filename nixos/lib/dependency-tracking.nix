@@ -422,8 +422,11 @@ let
           true  # Not under any known option (e.g., pkgs refs) — keep
         else if longestMatch == len then
           # Direct option path — check if it has any definitions
+          # Filter out options at default priority (>= 1500 = mkOptionDefault)
           let opt = lib.attrByPath path null options;
-          in opt != null && (opt.isDefined or false)
+          in opt != null
+             && (opt.isDefined or false)
+             && (opt.highestPrio or 100) < 1500
         else
           # Sub-path of a container option (e.g., users.users.vaultwarden.isSystemUser)
           # Check if any definition of the parent option includes this sub-path.
@@ -492,6 +495,8 @@ in
         (discard (builtins.toJSON explicitConfigValues));
       fullJson = builtins.toFile "nixos-tracking-full.json"
         (discard (builtins.toJSON configValues));
+      depsJson = builtins.toFile "nixos-tracking-deps.json"
+        (discard (builtins.toJSON filteredDeps));
     in
     pkgs.runCommand "nixos-toplevel-tracked" {} ''
       mkdir $out
@@ -500,6 +505,7 @@ in
       done
       ln -s ${fullJson} $out/tracking.json
       ln -s ${explicitJson} $out/tracking-explicit.json
+      ln -s ${depsJson} $out/tracking-deps.json
     '';
 
   # Path formatting utility
