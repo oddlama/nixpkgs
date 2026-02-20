@@ -35,7 +35,6 @@ struct MillerState {
     path: Vec<String>,
     cursor: usize,
     scroll: usize,
-    /// Remembers (cursor, scroll) for each path, so drilling back in restores position.
     path_memory: HashMap<Vec<String>, (usize, usize)>,
     detail_scroll: usize,
     deps_cursor: usize,
@@ -54,7 +53,82 @@ enum Mode {
 }
 
 // ---------------------------------------------------------------------------
-// Color system
+// OneHalfDark UI palette (text colors only, no bg changes)
+// ---------------------------------------------------------------------------
+
+/// OneHalfDark foreground
+const FG: Color = Color::Rgb(0xdc, 0xdf, 0xe4);
+/// OneHalfDark comment / dim text
+const COMMENT: Color = Color::Rgb(0x5c, 0x63, 0x70);
+/// OneHalfDark gutter / subtle bg accents
+const GUTTER: Color = Color::Rgb(0x4b, 0x52, 0x63);
+/// OneHalfDark blue (active borders, accents)
+const BLUE: Color = Color::Rgb(0x61, 0xaf, 0xef);
+/// OneHalfDark magenta (footer desc bg)
+const MAGENTA: Color = Color::Rgb(0xc6, 0x78, 0xdd);
+/// OneHalfDark green (status messages)
+const GREEN: Color = Color::Rgb(0x98, 0xc3, 0x79);
+/// OneHalfDark red
+const RED: Color = Color::Rgb(0xe0, 0x6c, 0x75);
+/// OneHalfDark yellow
+const YELLOW: Color = Color::Rgb(0xe5, 0xc0, 0x7b);
+/// OneHalfDark cyan
+const CYAN: Color = Color::Rgb(0x56, 0xb6, 0xc2);
+
+// UI element colors derived from the palette
+const ACTIVE_BORDER: Color = BLUE;
+const INACTIVE_BORDER: Color = GUTTER;
+const CURSOR_BG: Color = Color::Rgb(0x2c, 0x31, 0x3c);
+const PARENT_HIGHLIGHT_BG: Color = Color::Rgb(0x23, 0x27, 0x30);
+const HIGHLIGHT_BG: Color = Color::Rgb(0x80, 0x60, 0x00);
+const HEADER_BG: Color = Color::Rgb(0x21, 0x25, 0x2b);
+/// Footer key pill background
+const KEY_BG: Color = Color::Rgb(0x3e, 0x44, 0x52);
+/// Footer key pill foreground
+const KEY_FG: Color = FG;
+/// Footer desc pill background
+const DESC_BG: Color = MAGENTA;
+/// Footer desc pill foreground
+const DESC_FG: Color = Color::Rgb(0x21, 0x25, 0x2b);
+
+// ---------------------------------------------------------------------------
+// Nerd font icons & their colors (independent of section colors)
+// ---------------------------------------------------------------------------
+
+/// Folder icon for branches (nf-fa-folder U+F07B)
+const ICON_BRANCH: &str = "\u{f07b}";
+const ICON_BRANCH_COLOR: Color = YELLOW;
+
+/// Leaf icons by value type
+const ICON_BOOL: &str = "\u{f205}";      // nf-fa-toggle_on
+const ICON_BOOL_COLOR: Color = CYAN;
+const ICON_STRING: &str = "\u{f10d}";    // nf-fa-quote_left
+const ICON_STRING_COLOR: Color = GREEN;
+const ICON_NUMBER: &str = "\u{f292}";    // nf-fa-hashtag
+const ICON_NUMBER_COLOR: Color = MAGENTA;
+const ICON_NULL: &str = "\u{f071}";      // nf-fa-exclamation_triangle
+const ICON_NULL_COLOR: Color = COMMENT;
+const ICON_ARRAY: &str = "\u{f03a}";     // nf-fa-list
+const ICON_ARRAY_COLOR: Color = YELLOW;
+const ICON_OBJECT: &str = "\u{f1b2}";    // nf-fa-cube
+const ICON_OBJECT_COLOR: Color = COMMENT;
+
+fn node_icon(node: &ConfigNode) -> (&'static str, Color) {
+    match node {
+        ConfigNode::Branch(_) => (ICON_BRANCH, ICON_BRANCH_COLOR),
+        ConfigNode::Leaf(val) => match val {
+            Value::Bool(_) => (ICON_BOOL, ICON_BOOL_COLOR),
+            Value::String(_) => (ICON_STRING, ICON_STRING_COLOR),
+            Value::Number(_) => (ICON_NUMBER, ICON_NUMBER_COLOR),
+            Value::Null => (ICON_NULL, ICON_NULL_COLOR),
+            Value::Array(_) => (ICON_ARRAY, ICON_ARRAY_COLOR),
+            Value::Object(_) => (ICON_OBJECT, ICON_OBJECT_COLOR),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Section colors (for option names — unchanged)
 // ---------------------------------------------------------------------------
 
 fn section_color(name: &str) -> Color {
@@ -78,11 +152,11 @@ fn section_color(name: &str) -> Color {
 
 fn value_color(value: &Value) -> Color {
     match value {
-        Value::Bool(true) => Color::Rgb(0x59, 0xa1, 0x4f),
-        Value::Bool(false) => Color::Rgb(0xe1, 0x57, 0x59),
-        Value::Number(_) => Color::Rgb(0x00, 0xd7, 0xff),
-        Value::String(_) => Color::Rgb(0xed, 0xc9, 0x48),
-        Value::Null => Color::Rgb(0x88, 0x88, 0x88),
+        Value::Bool(true) => GREEN,
+        Value::Bool(false) => RED,
+        Value::Number(_) => CYAN,
+        Value::String(_) => YELLOW,
+        Value::Null => COMMENT,
         _ => Color::Rgb(0xaa, 0xaa, 0xaa),
     }
 }
@@ -210,9 +284,9 @@ fn format_value_short(value: &Value) -> String {
                 format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
             }
         }
-        Value::Array(arr) => format!("[ ... ] ({} items)", arr.len()),
+        Value::Array(arr) => format!("[{}]", arr.len()),
         Value::Object(map) if map.is_empty() => "{ }".to_string(),
-        Value::Object(map) => format!("{{ ... }} ({} keys)", map.len()),
+        Value::Object(map) => format!("{{{}}}", map.len()),
     }
 }
 
@@ -348,24 +422,36 @@ fn clamp_cursor(cursor: &mut usize, scroll: &mut usize, total: usize, visible: u
 // Rendering helpers
 // ---------------------------------------------------------------------------
 
-const ACTIVE_BORDER: Color = Color::Rgb(0x88, 0xaa, 0xff);
-const INACTIVE_BORDER: Color = Color::Rgb(0x44, 0x44, 0x55);
-const CURSOR_BG: Color = Color::Rgb(40, 40, 80);
-const PARENT_HIGHLIGHT_BG: Color = Color::Rgb(30, 30, 50);
-const DIM_GRAY: Color = Color::Rgb(0x66, 0x66, 0x66);
-const HIGHLIGHT_BG: Color = Color::Rgb(0x80, 0x60, 0x00);
-
 fn make_block(title: &str, active: bool) -> Block<'_> {
+    let border_color = if active { ACTIVE_BORDER } else { INACTIVE_BORDER };
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if active { ACTIVE_BORDER } else { INACTIVE_BORDER }))
+        .border_style(Style::default().fg(border_color))
         .title(Span::styled(
             format!(" {} ", title),
             Style::default()
-                .fg(if active { ACTIVE_BORDER } else { INACTIVE_BORDER })
+                .fg(border_color)
                 .add_modifier(Modifier::BOLD),
         ))
+}
+
+/// Render a footer "pill": ` key `` desc ` with contrasting backgrounds.
+fn footer_pill<'a>(key: &str, desc: &str) -> Vec<Span<'a>> {
+    vec![
+        Span::styled(
+            format!(" {} ", key),
+            Style::default()
+                .fg(KEY_FG)
+                .bg(KEY_BG)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {} ", desc),
+            Style::default().fg(DESC_FG).bg(DESC_BG),
+        ),
+        Span::raw(" "),
+    ]
 }
 
 fn render_pane_list<'a>(
@@ -378,16 +464,21 @@ fn render_pane_list<'a>(
     inner_width: u16,
 ) -> Vec<Line<'a>> {
     let width = inner_width as usize;
-    if width == 0 {
+    if width < 4 {
         return vec![Line::from(""); visible_height];
     }
     let end = children.len().min(scroll + visible_height);
     let mut lines = Vec::new();
 
+    // Icon column takes 2 chars: icon + space
+    let icon_col = 2;
+    let text_width = width.saturating_sub(icon_col);
+
     for i in scroll..end {
         let (name, node) = &children[i];
         let section = top_level_section(state_path, name);
         let color = section_color(&section);
+        let (icon, icon_color) = node_icon(node);
 
         let is_cursor = cursor_idx == Some(i);
         let is_highlight = highlight_name == Some(name.as_str());
@@ -400,22 +491,22 @@ fn render_pane_list<'a>(
             Color::Reset
         };
 
-        let name_style = Style::default().fg(color).bg(bg).add_modifier(
-            if is_cursor || is_highlight {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            },
-        );
+        let name_mod = if is_cursor || is_highlight {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        };
+
+        let name_style = Style::default().fg(color).bg(bg).add_modifier(name_mod);
 
         let suffix = match node {
             ConfigNode::Branch(ch) => {
                 let count_str = format!("{}", ch.len());
-                (count_str, Style::default().fg(DIM_GRAY).bg(bg))
+                (count_str, Style::default().fg(COMMENT).bg(bg))
             }
             ConfigNode::Leaf(val) => {
-                let short = format!("= {}", format_value_short(val));
-                let max_suffix = width / 2;
+                let short = format_value_short(val);
+                let max_suffix = text_width / 2;
                 let short = if max_suffix > 3 && short.len() > max_suffix {
                     format!("{}...", &short[..max_suffix - 3])
                 } else {
@@ -425,8 +516,8 @@ fn render_pane_list<'a>(
             }
         };
 
-        let name_display = if name.len() + 1 + suffix.0.len() > width && name.len() > 3 {
-            let max_name = width.saturating_sub(suffix.0.len() + 4);
+        let name_display = if name.len() + 1 + suffix.0.len() > text_width && name.len() > 3 {
+            let max_name = text_width.saturating_sub(suffix.0.len() + 4);
             if max_name > 3 {
                 format!("{}...", &name[..max_name])
             } else {
@@ -438,13 +529,17 @@ fn render_pane_list<'a>(
 
         let name_len = name_display.len();
         let suffix_len = suffix.0.len();
-        let padding = if name_len + suffix_len + 1 < width {
-            width - name_len - suffix_len
+        let padding = if name_len + suffix_len + 1 < text_width {
+            text_width - name_len - suffix_len
         } else {
             1
         };
 
         lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", icon),
+                Style::default().fg(icon_color).bg(bg),
+            ),
             Span::styled(name_display, name_style),
             Span::styled(" ".repeat(padding), Style::default().bg(bg)),
             Span::styled(suffix.0, suffix.1),
@@ -482,7 +577,6 @@ fn render_search_result_line<'a>(
         if let Some(start) = lower_display.find(&lower_query) {
             let end = start + query.len();
             let mut spans = Vec::new();
-
             if start > 0 {
                 spans.push(Span::styled(
                     display[..start].to_string(),
@@ -513,7 +607,7 @@ fn render_search_result_line<'a>(
 }
 
 // ---------------------------------------------------------------------------
-// Bottom pane renderers (Detail, Dependencies, Dependents)
+// Bottom pane renderers
 // ---------------------------------------------------------------------------
 
 fn render_detail_info<'a>(
@@ -533,7 +627,6 @@ fn render_detail_info<'a>(
 
     let mut content: Vec<Line<'a>> = Vec::new();
 
-    // Path
     content.push(Line::from(Span::styled(
         full_path.join("."),
         Style::default()
@@ -542,15 +635,14 @@ fn render_detail_info<'a>(
     )));
     content.push(Line::from(""));
 
-    // Value
     let divider = "\u{2500}".repeat(width.min(30));
     content.push(Line::from(Span::styled(
         "Value",
-        Style::default().add_modifier(Modifier::BOLD),
+        Style::default().fg(FG).add_modifier(Modifier::BOLD),
     )));
     content.push(Line::from(Span::styled(
         divider,
-        Style::default().fg(DIM_GRAY),
+        Style::default().fg(COMMENT),
     )));
 
     match node {
@@ -563,12 +655,11 @@ fn render_detail_info<'a>(
         ConfigNode::Branch(children) => {
             content.push(Line::from(Span::styled(
                 format!("{} children", children.len()),
-                Style::default().fg(DIM_GRAY),
+                Style::default().fg(COMMENT),
             )));
         }
     }
 
-    // Apply scroll
     let total = content.len();
     let start = scroll.min(total);
     let end = total.min(start + visible_height);
@@ -588,7 +679,7 @@ fn render_dep_list<'a>(
     if items.is_empty() {
         let mut lines = vec![Line::from(Span::styled(
             "  (none)",
-            Style::default().fg(DIM_GRAY),
+            Style::default().fg(COMMENT),
         ))];
         while lines.len() < visible_height {
             lines.push(Line::from(""));
@@ -606,7 +697,7 @@ fn render_dep_list<'a>(
         let bg = if is_selected { CURSOR_BG } else { Color::Reset };
         let prefix = if is_selected { "> " } else { "  " };
         lines.push(Line::from(vec![
-            Span::styled(prefix, Style::default().bg(bg)),
+            Span::styled(prefix, Style::default().fg(FG).bg(bg)),
             Span::styled(
                 dep.to_string(),
                 Style::default()
@@ -627,7 +718,7 @@ fn render_dep_list<'a>(
     lines
 }
 
-/// Combined detail for search mode right pane (value + deps + dependents in one).
+/// Combined detail for search mode right pane.
 fn render_search_detail<'a>(
     full_path: &[String],
     node: &ConfigNode,
@@ -655,14 +746,13 @@ fn render_search_detail<'a>(
     )));
     content.push(Line::from(""));
 
-    // Value
     content.push(Line::from(Span::styled(
         "Value",
-        Style::default().add_modifier(Modifier::BOLD),
+        Style::default().fg(FG).add_modifier(Modifier::BOLD),
     )));
     content.push(Line::from(Span::styled(
         divider.clone(),
-        Style::default().fg(DIM_GRAY),
+        Style::default().fg(COMMENT),
     )));
     match node {
         ConfigNode::Leaf(val) => {
@@ -674,14 +764,13 @@ fn render_search_detail<'a>(
         ConfigNode::Branch(children) => {
             content.push(Line::from(Span::styled(
                 format!("{} children", children.len()),
-                Style::default().fg(DIM_GRAY),
+                Style::default().fg(COMMENT),
             )));
         }
     }
 
     content.push(Line::from(""));
 
-    // Dependencies
     let dep_items: Vec<&str> = deps_index
         .dependencies
         .get(&path_str)
@@ -689,16 +778,16 @@ fn render_search_detail<'a>(
         .unwrap_or_default();
     content.push(Line::from(Span::styled(
         format!("Dependencies ({})", dep_items.len()),
-        Style::default().add_modifier(Modifier::BOLD),
+        Style::default().fg(FG).add_modifier(Modifier::BOLD),
     )));
     content.push(Line::from(Span::styled(
         divider.clone(),
-        Style::default().fg(DIM_GRAY),
+        Style::default().fg(COMMENT),
     )));
     if dep_items.is_empty() {
         content.push(Line::from(Span::styled(
             "  (none)",
-            Style::default().fg(DIM_GRAY),
+            Style::default().fg(COMMENT),
         )));
     } else {
         for dep in &dep_items {
@@ -712,7 +801,6 @@ fn render_search_detail<'a>(
 
     content.push(Line::from(""));
 
-    // Dependents
     let rev_items: Vec<&str> = deps_index
         .dependents
         .get(&path_str)
@@ -720,16 +808,16 @@ fn render_search_detail<'a>(
         .unwrap_or_default();
     content.push(Line::from(Span::styled(
         format!("Dependents ({})", rev_items.len()),
-        Style::default().add_modifier(Modifier::BOLD),
+        Style::default().fg(FG).add_modifier(Modifier::BOLD),
     )));
     content.push(Line::from(Span::styled(
         divider,
-        Style::default().fg(DIM_GRAY),
+        Style::default().fg(COMMENT),
     )));
     if rev_items.is_empty() {
         content.push(Line::from(Span::styled(
             "  (none)",
-            Style::default().fg(DIM_GRAY),
+            Style::default().fg(COMMENT),
         )));
     } else {
         for dep in &rev_items {
@@ -750,7 +838,6 @@ fn render_search_detail<'a>(
     result
 }
 
-/// Count total dep items (dependencies + dependents) for cursor clamping.
 fn deps_total_count(path_str: &str, deps_index: &DepsIndex) -> usize {
     let d = deps_index
         .dependencies
@@ -765,7 +852,6 @@ fn deps_total_count(path_str: &str, deps_index: &DepsIndex) -> usize {
     d + r
 }
 
-/// Get the dep path at a given combined cursor position.
 fn dep_item_at(path_str: &str, deps_index: &DepsIndex, cursor: usize) -> Option<Vec<String>> {
     let deps: Vec<&String> = deps_index
         .dependencies
@@ -787,7 +873,6 @@ fn dep_item_at(path_str: &str, deps_index: &DepsIndex, cursor: usize) -> Option<
     }
 }
 
-/// Centered rectangle for help overlay.
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let v = Layout::default()
         .direction(Direction::Vertical)
@@ -884,7 +969,6 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Load deps (graceful fallback)
     let deps_index = match resolve::resolve_deps(config) {
         Ok(deps_json) => build_deps_index(&deps_json),
         Err(_) => DepsIndex {
@@ -920,6 +1004,7 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
 
         terminal.draw(|frame| {
             let size = frame.area();
+            let screen_width = size.width;
 
             match &mode {
                 // =============================================================
@@ -931,38 +1016,34 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                     cursor: s_cursor,
                     scroll: s_scroll,
                 } => {
-                    // Vertical: header, body, search-bar (bordered), footer
                     let outer = Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([
-                            Constraint::Length(1),  // header
-                            Constraint::Min(1),     // body
-                            Constraint::Length(3),  // search bar (border + 1 line + border)
-                            Constraint::Length(1),  // footer
+                            Constraint::Length(1),
+                            Constraint::Min(1),
+                            Constraint::Length(3),
+                            Constraint::Length(1),
                         ])
                         .split(size);
 
-                    // -- Header --
+                    // Header
                     let total = results.len();
                     let header = Line::from(vec![
                         Span::styled(
                             " Search ",
-                            Style::default()
-                                .fg(Color::White)
-                                .add_modifier(Modifier::BOLD),
+                            Style::default().fg(FG).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
                             format!(" {} results", total),
-                            Style::default().fg(DIM_GRAY),
+                            Style::default().fg(COMMENT),
                         ),
                     ]);
                     frame.render_widget(
-                        Paragraph::new(header)
-                            .style(Style::default().bg(Color::Rgb(20, 20, 30))),
+                        Paragraph::new(header).style(Style::default().bg(HEADER_BG)),
                         outer[0],
                     );
 
-                    // -- Body: Results + Detail --
+                    // Body: Results + Detail
                     let body = Layout::default()
                         .direction(Direction::Horizontal)
                         .constraints([
@@ -971,7 +1052,6 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                         ])
                         .split(outer[1]);
 
-                    // Results pane
                     let results_block = make_block("Results", true);
                     let results_inner = results_block.inner(body[0]);
                     let results_height = results_inner.height as usize;
@@ -994,11 +1074,10 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                     while result_lines.len() < results_height {
                         result_lines.push(Line::from(""));
                     }
-
                     frame.render_widget(results_block, body[0]);
                     frame.render_widget(Paragraph::new(result_lines), results_inner);
 
-                    // Detail pane
+                    // Detail
                     let detail_block = make_block("Detail", false);
                     let detail_inner = detail_block.inner(body[1]);
                     let detail_height = detail_inner.height as usize;
@@ -1010,11 +1089,7 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                         let name = &rp[rp.len() - 1];
                         if let Some(node) = get_node_at_path(&root_children, parent, name) {
                             render_search_detail(
-                                rp,
-                                node,
-                                &deps_index,
-                                detail_width,
-                                detail_height,
+                                rp, node, &deps_index, detail_width, detail_height,
                             )
                         } else {
                             vec![Line::from(""); detail_height]
@@ -1022,43 +1097,35 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                     } else {
                         vec![Line::from(""); detail_height]
                     };
-
                     frame.render_widget(detail_block, body[1]);
                     frame.render_widget(Paragraph::new(detail_lines), detail_inner);
 
-                    // -- Search bar (bordered pane) --
+                    // Search bar
                     let search_block = make_block("Search", true);
                     let search_inner = search_block.inner(outer[2]);
                     let search_line = Line::from(vec![
-                        Span::raw(query.as_str()),
-                        Span::styled("\u{2588}", Style::default().fg(ACTIVE_BORDER)),
+                        Span::styled(query.as_str(), Style::default().fg(FG)),
+                        Span::styled("\u{2588}", Style::default().fg(BLUE)),
                     ]);
                     frame.render_widget(search_block, outer[2]);
                     frame.render_widget(Paragraph::new(search_line), search_inner);
 
-                    // -- Footer --
-                    let footer = Line::from(vec![
+                    // Footer
+                    let mut footer_spans = vec![Span::raw(" ")];
+                    footer_spans.extend(footer_pill("\u{2191}\u{2193}", "select"));
+                    footer_spans.extend(footer_pill("Enter", "jump"));
+                    footer_spans.extend(footer_pill("Esc", "close"));
+                    footer_spans.push(if total > 0 {
                         Span::styled(
-                            " \u{2191}\u{2193}",
-                            Style::default().add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(":select "),
-                        Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(":jump "),
-                        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(":close "),
-                        if total > 0 {
-                            Span::styled(
-                                format!("[{}/{}]", cu + 1, total),
-                                Style::default().fg(DIM_GRAY),
-                            )
-                        } else {
-                            Span::styled("[0/0]", Style::default().fg(DIM_GRAY))
-                        },
-                    ]);
+                            format!("[{}/{}]", cu + 1, total),
+                            Style::default().fg(COMMENT),
+                        )
+                    } else {
+                        Span::styled("[0/0]", Style::default().fg(COMMENT))
+                    });
                     frame.render_widget(
-                        Paragraph::new(footer)
-                            .style(Style::default().bg(Color::Rgb(20, 20, 30))),
+                        Paragraph::new(Line::from(footer_spans))
+                            .style(Style::default().bg(HEADER_BG)),
                         outer[3],
                     );
                 }
@@ -1067,23 +1134,20 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                 // Normal / Help layout
                 // =============================================================
                 _ => {
-                    // Vertical: header, top-nav-row, bottom-info-row, footer
                     let outer = Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([
-                            Constraint::Length(1),    // header
-                            Constraint::Percentage(55), // top navigation row
-                            Constraint::Percentage(45), // bottom info row
-                            Constraint::Length(1),    // footer
+                            Constraint::Length(1),
+                            Constraint::Percentage(60),
+                            Constraint::Percentage(40),
+                            Constraint::Length(1),
                         ])
                         .split(size);
 
                     // ---- Header ----
                     let mut header_spans: Vec<Span> = vec![Span::styled(
                         format!(" {} ", config),
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(FG).add_modifier(Modifier::BOLD),
                     )];
                     if !state.path.is_empty() {
                         header_spans.push(Span::styled(" ", Style::default()));
@@ -1096,7 +1160,7 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                             if i > 0 {
                                 header_spans.push(Span::styled(
                                     ".",
-                                    Style::default().fg(DIM_GRAY),
+                                    Style::default().fg(COMMENT),
                                 ));
                             }
                             header_spans.push(Span::styled(
@@ -1107,21 +1171,21 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                     }
                     frame.render_widget(
                         Paragraph::new(Line::from(header_spans))
-                            .style(Style::default().bg(Color::Rgb(20, 20, 30))),
+                            .style(Style::default().bg(HEADER_BG)),
                         outer[0],
                     );
 
-                    // ---- Top row: Parent | Browse | Children ----
+                    // ---- Top row: Parent (25%) | Browse (50%) | Children (25%) ----
                     let top = Layout::default()
                         .direction(Direction::Horizontal)
                         .constraints([
                             Constraint::Percentage(25),
-                            Constraint::Percentage(40),
-                            Constraint::Percentage(35),
+                            Constraint::Percentage(50),
+                            Constraint::Percentage(25),
                         ])
                         .split(outer[1]);
 
-                    // -- Left: Parent --
+                    // Parent
                     let left_block = make_block("Parent", false);
                     let left_inner = left_block.inner(top[0]);
                     let left_height = left_inner.height as usize;
@@ -1157,7 +1221,7 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                     frame.render_widget(left_block, top[0]);
                     frame.render_widget(Paragraph::new(left_lines), left_inner);
 
-                    // -- Middle: Browse --
+                    // Browse
                     let middle_active = state.focus == Focus::Middle;
                     let middle_block = make_block("Browse", middle_active);
                     let middle_inner = middle_block.inner(top[1]);
@@ -1186,7 +1250,7 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                     frame.render_widget(middle_block, top[1]);
                     frame.render_widget(Paragraph::new(middle_lines), middle_inner);
 
-                    // -- Right: Children --
+                    // Children
                     let children_block = make_block("Children", false);
                     let children_inner = children_block.inner(top[2]);
                     let children_height = children_inner.height as usize;
@@ -1198,38 +1262,29 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                                 .map(|(n, node)| (n.as_str(), node))
                         });
 
-                    let children_lines = if let Some((name, ConfigNode::Branch(ch))) = selected {
-                        let preview_path = {
-                            let mut p = state.path.clone();
-                            p.push(name.to_string());
-                            p
+                    let children_lines =
+                        if let Some((name, ConfigNode::Branch(ch))) = selected {
+                            let preview_path = {
+                                let mut p = state.path.clone();
+                                p.push(name.to_string());
+                                p
+                            };
+                            render_pane_list(
+                                ch,
+                                &preview_path,
+                                None,
+                                None,
+                                0,
+                                children_height,
+                                children_width,
+                            )
+                        } else {
+                            vec![Line::from(""); children_height]
                         };
-                        render_pane_list(
-                            ch,
-                            &preview_path,
-                            None,
-                            None,
-                            0,
-                            children_height,
-                            children_width,
-                        )
-                    } else {
-                        vec![Line::from(""); children_height]
-                    };
                     frame.render_widget(children_block, top[2]);
                     frame.render_widget(Paragraph::new(children_lines), children_inner);
 
                     // ---- Bottom row: Detail | Dependencies | Dependents ----
-                    let bottom = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([
-                            Constraint::Percentage(34),
-                            Constraint::Percentage(33),
-                            Constraint::Percentage(33),
-                        ])
-                        .split(outer[2]);
-
-                    // Compute full path and dep data for the selected item
                     let full_path: Vec<String> = if let Some((name, _)) = selected {
                         let mut p = state.path.clone();
                         p.push(name.to_string());
@@ -1251,95 +1306,165 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                         .unwrap_or_default();
                     let dep_count = dep_items.len();
 
-                    // -- Detail pane --
-                    let detail_block = make_block("Detail", false);
-                    let detail_inner = detail_block.inner(bottom[0]);
-                    let detail_height = detail_inner.height as usize;
-                    let detail_width = detail_inner.width;
-
-                    let detail_lines = if let Some((_, node)) = selected {
-                        render_detail_info(
-                            &full_path,
-                            node,
-                            state.detail_scroll,
-                            detail_width,
-                            detail_height,
-                        )
-                    } else {
-                        vec![Line::from(""); detail_height]
-                    };
-                    frame.render_widget(detail_block, bottom[0]);
-                    frame.render_widget(Paragraph::new(detail_lines), detail_inner);
-
-                    // -- Dependencies pane --
                     let deps_focus = state.focus == Focus::Deps;
-                    // Cursor falls in deps pane if < dep_count
-                    let deps_cursor = if deps_focus && state.deps_cursor < dep_count {
-                        Some(state.deps_cursor)
+
+                    let narrow = screen_width < 110;
+
+                    if narrow {
+                        // Narrow: Detail (50%) | stacked Deps+Revs (50%)
+                        let bottom = Layout::default()
+                            .direction(Direction::Horizontal)
+                            .constraints([
+                                Constraint::Percentage(50),
+                                Constraint::Percentage(50),
+                            ])
+                            .split(outer[2]);
+
+                        // Detail
+                        let detail_block = make_block("Detail", false);
+                        let detail_inner = detail_block.inner(bottom[0]);
+                        let detail_height = detail_inner.height as usize;
+                        let detail_width = detail_inner.width;
+                        let detail_lines = if let Some((_, node)) = selected {
+                            render_detail_info(
+                                &full_path,
+                                node,
+                                state.detail_scroll,
+                                detail_width,
+                                detail_height,
+                            )
+                        } else {
+                            vec![Line::from(""); detail_height]
+                        };
+                        frame.render_widget(detail_block, bottom[0]);
+                        frame.render_widget(Paragraph::new(detail_lines), detail_inner);
+
+                        // Stacked deps + dependents
+                        let right_stack = Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([
+                                Constraint::Percentage(50),
+                                Constraint::Percentage(50),
+                            ])
+                            .split(bottom[1]);
+
+                        // Dependencies
+                        let deps_cursor = if deps_focus && state.deps_cursor < dep_count {
+                            Some(state.deps_cursor)
+                        } else {
+                            None
+                        };
+                        let deps_active = deps_focus && deps_cursor.is_some();
+                        let deps_title = format!("Dependencies ({})", dep_count);
+                        let deps_block = make_block(&deps_title, deps_active);
+                        let deps_inner = deps_block.inner(right_stack[0]);
+                        let deps_height = deps_inner.height as usize;
+                        let deps_lines =
+                            render_dep_list(&dep_items, deps_cursor, 0, deps_height);
+                        frame.render_widget(deps_block, right_stack[0]);
+                        frame.render_widget(Paragraph::new(deps_lines), deps_inner);
+
+                        // Dependents
+                        let rev_cursor = if deps_focus && state.deps_cursor >= dep_count {
+                            Some(state.deps_cursor - dep_count)
+                        } else {
+                            None
+                        };
+                        let rev_active = deps_focus && rev_cursor.is_some();
+                        let rev_title = format!("Dependents ({})", rev_items.len());
+                        let rev_block = make_block(&rev_title, rev_active);
+                        let rev_inner = rev_block.inner(right_stack[1]);
+                        let rev_height = rev_inner.height as usize;
+                        let rev_lines =
+                            render_dep_list(&rev_items, rev_cursor, 0, rev_height);
+                        frame.render_widget(rev_block, right_stack[1]);
+                        frame.render_widget(Paragraph::new(rev_lines), rev_inner);
                     } else {
-                        None
-                    };
-                    let deps_active = deps_focus && deps_cursor.is_some();
-                    let deps_title = format!("Dependencies ({})", dep_count);
-                    let deps_block = make_block(&deps_title, deps_active);
-                    let deps_inner = deps_block.inner(bottom[1]);
-                    let deps_height = deps_inner.height as usize;
+                        // Wide: Detail (50%) | Dependencies (25%) | Dependents (25%)
+                        let bottom = Layout::default()
+                            .direction(Direction::Horizontal)
+                            .constraints([
+                                Constraint::Percentage(50),
+                                Constraint::Percentage(25),
+                                Constraint::Percentage(25),
+                            ])
+                            .split(outer[2]);
 
-                    let deps_lines =
-                        render_dep_list(&dep_items, deps_cursor, 0, deps_height);
-                    frame.render_widget(deps_block, bottom[1]);
-                    frame.render_widget(Paragraph::new(deps_lines), deps_inner);
+                        // Detail
+                        let detail_block = make_block("Detail", false);
+                        let detail_inner = detail_block.inner(bottom[0]);
+                        let detail_height = detail_inner.height as usize;
+                        let detail_width = detail_inner.width;
+                        let detail_lines = if let Some((_, node)) = selected {
+                            render_detail_info(
+                                &full_path,
+                                node,
+                                state.detail_scroll,
+                                detail_width,
+                                detail_height,
+                            )
+                        } else {
+                            vec![Line::from(""); detail_height]
+                        };
+                        frame.render_widget(detail_block, bottom[0]);
+                        frame.render_widget(Paragraph::new(detail_lines), detail_inner);
 
-                    // -- Dependents pane --
-                    let rev_cursor = if deps_focus && state.deps_cursor >= dep_count {
-                        Some(state.deps_cursor - dep_count)
-                    } else {
-                        None
-                    };
-                    let rev_active = deps_focus && rev_cursor.is_some();
-                    let rev_title = format!("Dependents ({})", rev_items.len());
-                    let rev_block = make_block(&rev_title, rev_active);
-                    let rev_inner = rev_block.inner(bottom[2]);
-                    let rev_height = rev_inner.height as usize;
+                        // Dependencies
+                        let deps_cursor = if deps_focus && state.deps_cursor < dep_count {
+                            Some(state.deps_cursor)
+                        } else {
+                            None
+                        };
+                        let deps_active = deps_focus && deps_cursor.is_some();
+                        let deps_title = format!("Dependencies ({})", dep_count);
+                        let deps_block = make_block(&deps_title, deps_active);
+                        let deps_inner = deps_block.inner(bottom[1]);
+                        let deps_height = deps_inner.height as usize;
+                        let deps_lines =
+                            render_dep_list(&dep_items, deps_cursor, 0, deps_height);
+                        frame.render_widget(deps_block, bottom[1]);
+                        frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
-                    let rev_lines =
-                        render_dep_list(&rev_items, rev_cursor, 0, rev_height);
-                    frame.render_widget(rev_block, bottom[2]);
-                    frame.render_widget(Paragraph::new(rev_lines), rev_inner);
+                        // Dependents
+                        let rev_cursor = if deps_focus && state.deps_cursor >= dep_count {
+                            Some(state.deps_cursor - dep_count)
+                        } else {
+                            None
+                        };
+                        let rev_active = deps_focus && rev_cursor.is_some();
+                        let rev_title = format!("Dependents ({})", rev_items.len());
+                        let rev_block = make_block(&rev_title, rev_active);
+                        let rev_inner = rev_block.inner(bottom[2]);
+                        let rev_height = rev_inner.height as usize;
+                        let rev_lines =
+                            render_dep_list(&rev_items, rev_cursor, 0, rev_height);
+                        frame.render_widget(rev_block, bottom[2]);
+                        frame.render_widget(Paragraph::new(rev_lines), rev_inner);
+                    }
 
                     // ---- Footer ----
                     let footer_line = if let Some(msg) = &status_msg {
-                        Line::from(Span::styled(
-                            format!(" {} ", msg),
-                            Style::default().fg(Color::Rgb(0x59, 0xa1, 0x4f)),
-                        ))
+                        Line::from(vec![
+                            Span::raw(" "),
+                            Span::styled(
+                                format!(" {} ", msg),
+                                Style::default().fg(DESC_FG).bg(GREEN),
+                            ),
+                        ])
                     } else {
                         let pos = format!("[{}/{}]", state.cursor + 1, middle_count);
-                        Line::from(vec![
-                            Span::styled(
-                                " \u{2191}\u{2193}",
-                                Style::default().add_modifier(Modifier::BOLD),
-                            ),
-                            Span::raw(":move "),
-                            Span::styled(
-                                "\u{2190}\u{2192}",
-                                Style::default().add_modifier(Modifier::BOLD),
-                            ),
-                            Span::raw(":in/out "),
-                            Span::styled("/", Style::default().add_modifier(Modifier::BOLD)),
-                            Span::raw(":search "),
-                            Span::styled("d", Style::default().add_modifier(Modifier::BOLD)),
-                            Span::raw(":deps "),
-                            Span::styled("?", Style::default().add_modifier(Modifier::BOLD)),
-                            Span::raw(":help "),
-                            Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
-                            Span::raw(":quit "),
-                            Span::styled(pos, Style::default().fg(DIM_GRAY)),
-                        ])
+                        let mut spans = vec![Span::raw(" ")];
+                        spans.extend(footer_pill("\u{2191}\u{2193}", "move"));
+                        spans.extend(footer_pill("\u{2190}\u{2192}", "in/out"));
+                        spans.extend(footer_pill("/", "search"));
+                        spans.extend(footer_pill("d", "deps"));
+                        spans.extend(footer_pill("?", "help"));
+                        spans.extend(footer_pill("q", "quit"));
+                        spans.push(Span::styled(pos, Style::default().fg(COMMENT)));
+                        Line::from(spans)
                     };
                     frame.render_widget(
-                        Paragraph::new(footer_line)
-                            .style(Style::default().bg(Color::Rgb(20, 20, 30))),
+                        Paragraph::new(footer_line).style(Style::default().bg(HEADER_BG)),
                         outer[3],
                     );
 
@@ -1351,14 +1476,14 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                         let help_block = Block::default()
                             .borders(Borders::ALL)
                             .border_type(BorderType::Rounded)
-                            .border_style(Style::default().fg(ACTIVE_BORDER))
+                            .border_style(Style::default().fg(BLUE))
                             .title(Span::styled(
                                 " Keyboard Shortcuts ",
                                 Style::default()
-                                    .fg(ACTIVE_BORDER)
+                                    .fg(BLUE)
                                     .add_modifier(Modifier::BOLD),
                             ))
-                            .style(Style::default().bg(Color::Rgb(15, 15, 25)));
+                            .style(Style::default().bg(Color::Rgb(0x1e, 0x22, 0x2a)));
                         let help_inner = help_block.inner(help_area);
                         frame.render_widget(help_block, help_area);
 
@@ -1370,7 +1495,7 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                                 help_lines.push(Line::from(Span::styled(
                                     format!(" {}", key),
                                     Style::default()
-                                        .fg(ACTIVE_BORDER)
+                                        .fg(BLUE)
                                         .add_modifier(Modifier::BOLD),
                                 )));
                             } else {
@@ -1380,12 +1505,12 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                                     Span::styled(
                                         padded,
                                         Style::default()
-                                            .fg(Color::White)
+                                            .fg(FG)
                                             .add_modifier(Modifier::BOLD),
                                     ),
                                     Span::styled(
                                         desc.to_string(),
-                                        Style::default().fg(Color::Rgb(0xd3, 0xd3, 0xd3)),
+                                        Style::default().fg(COMMENT),
                                     ),
                                 ]));
                             }
@@ -1393,7 +1518,7 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                         help_lines.push(Line::from(""));
                         help_lines.push(Line::from(Span::styled(
                             "  Press ? or Esc to close",
-                            Style::default().fg(DIM_GRAY),
+                            Style::default().fg(COMMENT),
                         )));
 
                         frame.render_widget(Paragraph::new(help_lines), help_inner);
@@ -1528,7 +1653,6 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                     },
 
                     Focus::Deps => {
-                        // Compute selected path for deps navigation
                         let full_path: Vec<String> = {
                             let mut p = state.path.clone();
                             if let Some(children) =
@@ -1588,9 +1712,6 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                 }
             }
 
-            // =================================================================
-            // Search input — typing always goes to query, arrows move results
-            // =================================================================
             Mode::Search {
                 query,
                 results,
