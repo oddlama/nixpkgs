@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -28,7 +28,9 @@ struct DepsIndex {
 #[derive(Clone, PartialEq)]
 enum Focus {
     Middle,
+    Detail,
     Deps,
+    Revs,
 }
 
 struct MillerState {
@@ -50,6 +52,12 @@ enum Mode {
         scroll: usize,
     },
     Help,
+    Pager {
+        path: Vec<String>,
+        lines: Vec<String>,
+        scroll: usize,
+        color: Color,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -76,7 +84,7 @@ const YELLOW: Color = Color::Rgb(0xe5, 0xc0, 0x7b);
 const CYAN: Color = Color::Rgb(0x56, 0xb6, 0xc2);
 
 // UI element colors derived from the palette
-const ACTIVE_BORDER: Color = BLUE;
+const ACTIVE_BORDER: Color = MAGENTA;
 const INACTIVE_BORDER: Color = GUTTER;
 const CURSOR_BG: Color = Color::Rgb(0x2c, 0x31, 0x3c);
 const PARENT_HIGHLIGHT_BG: Color = Color::Rgb(0x23, 0x27, 0x30);
@@ -128,25 +136,20 @@ fn node_icon(node: &ConfigNode) -> (&'static str, Color) {
 }
 
 // ---------------------------------------------------------------------------
-// Section colors (for option names — unchanged)
+// Type-based colors (replaces section colors)
 // ---------------------------------------------------------------------------
 
-fn section_color(name: &str) -> Color {
-    match name {
-        "services" => Color::Rgb(0x4e, 0x79, 0xa7),
-        "systemd" => Color::Rgb(0x59, 0xa1, 0x4f),
-        "boot" => Color::Rgb(0xe1, 0x57, 0x59),
-        "networking" => Color::Rgb(0xf2, 0x8e, 0x2b),
-        "users" => Color::Rgb(0xb0, 0x7a, 0xa1),
-        "security" => Color::Rgb(0xff, 0x9d, 0xa7),
-        "environment" => Color::Rgb(0x9c, 0x75, 0x5f),
-        "hardware" => Color::Rgb(0xba, 0xb0, 0xac),
-        "system" => Color::Rgb(0x76, 0xb7, 0xb2),
-        "nix" | "nixpkgs" => Color::Rgb(0xed, 0xc9, 0x48),
-        "programs" => Color::Rgb(0xaf, 0x7a, 0xa1),
-        "fileSystems" => Color::Rgb(0xd4, 0xa3, 0x73),
-        "virtualisation" => Color::Rgb(0x8c, 0xd1, 0x7d),
-        _ => Color::Rgb(0xd3, 0xd3, 0xd3),
+fn node_name_color(node: &ConfigNode) -> Color {
+    match node {
+        ConfigNode::Branch(_) => BLUE,
+        ConfigNode::Leaf(val) => match val {
+            Value::Bool(_) => CYAN,
+            Value::String(_) => GREEN,
+            Value::Number(_) => MAGENTA,
+            Value::Null => COMMENT,
+            Value::Array(_) => YELLOW,
+            Value::Object(_) => COMMENT,
+        },
     }
 }
 
@@ -154,24 +157,25 @@ fn value_color(value: &Value) -> Color {
     match value {
         Value::Bool(true) => GREEN,
         Value::Bool(false) => RED,
-        Value::Number(_) => CYAN,
-        Value::String(_) => YELLOW,
+        Value::Number(_) => MAGENTA,
+        Value::String(_) => GREEN,
         Value::Null => COMMENT,
-        _ => Color::Rgb(0xaa, 0xaa, 0xaa),
-    }
-}
-
-fn top_level_section(path: &[String], name: &str) -> String {
-    if path.is_empty() {
-        name.to_string()
-    } else {
-        path[0].clone()
+        Value::Array(_) => YELLOW,
+        Value::Object(_) => COMMENT,
     }
 }
 
 // ---------------------------------------------------------------------------
 // Tree building
 // ---------------------------------------------------------------------------
+
+fn sort_branches_first(children: &mut [(String, ConfigNode)]) {
+    children.sort_by(|(a, na), (b, nb)| {
+        let a_branch = matches!(na, ConfigNode::Branch(_));
+        let b_branch = matches!(nb, ConfigNode::Branch(_));
+        b_branch.cmp(&a_branch).then_with(|| a.cmp(b))
+    });
+}
 
 fn build_config_tree(value: &Value) -> ConfigNode {
     match value {
@@ -181,7 +185,7 @@ fn build_config_tree(value: &Value) -> ConfigNode {
                 .iter()
                 .map(|(k, v)| (k.clone(), build_config_tree(v)))
                 .collect();
-            children.sort_by(|(a, _), (b, _)| a.cmp(b));
+            sort_branches_first(&mut children);
             ConfigNode::Branch(children)
         }
         _ => ConfigNode::Leaf(value.clone()),
@@ -210,6 +214,13 @@ fn get_node_at_path<'a>(
 ) -> Option<&'a ConfigNode> {
     let children = get_children_at_path(root, path)?;
     children.iter().find(|(n, _)| n == name).map(|(_, node)| node)
+}
+
+fn lookup_node<'a>(root: &'a [(String, ConfigNode)], path: &[String]) -> Option<&'a ConfigNode> {
+    if path.is_empty() {
+        return None;
+    }
+    get_node_at_path(root, &path[..path.len() - 1], &path[path.len() - 1])
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +429,16 @@ fn clamp_cursor(cursor: &mut usize, scroll: &mut usize, total: usize, visible: u
     }
 }
 
+fn current_full_path(state: &MillerState, root: &[(String, ConfigNode)]) -> Vec<String> {
+    let mut p = state.path.clone();
+    if let Some(children) = get_children_at_path(root, &state.path) {
+        if let Some((name, _)) = children.get(state.cursor) {
+            p.push(name.clone());
+        }
+    }
+    p
+}
+
 // ---------------------------------------------------------------------------
 // Rendering helpers
 // ---------------------------------------------------------------------------
@@ -434,6 +455,44 @@ fn make_block(title: &str, active: bool) -> Block<'_> {
                 .fg(border_color)
                 .add_modifier(Modifier::BOLD),
         ))
+}
+
+/// Block with a focus-key letter highlighted in bold red within the title.
+fn make_block_keyed<'a>(base: &str, count: Option<usize>, key_char: char, active: bool) -> Block<'a> {
+    let border_color = if active { ACTIVE_BORDER } else { INACTIVE_BORDER };
+    let mut spans: Vec<Span<'a>> = vec![Span::raw(" ")];
+    let mut found = false;
+    for c in base.chars() {
+        if !found && c.to_ascii_lowercase() == key_char {
+            spans.push(Span::styled(
+                c.to_string(),
+                Style::default().fg(RED).add_modifier(Modifier::BOLD),
+            ));
+            found = true;
+        } else {
+            spans.push(Span::styled(
+                c.to_string(),
+                Style::default()
+                    .fg(border_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+    if let Some(n) = count {
+        spans.push(Span::styled(
+            format!(" ({})", n),
+            Style::default()
+                .fg(border_color)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans.push(Span::raw(" "));
+
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title(Line::from(spans))
 }
 
 /// Render a footer "pill": ` key `` desc ` with contrasting backgrounds.
@@ -456,7 +515,6 @@ fn footer_pill<'a>(key: &str, desc: &str) -> Vec<Span<'a>> {
 
 fn render_pane_list<'a>(
     children: &[(String, ConfigNode)],
-    state_path: &[String],
     highlight_name: Option<&str>,
     cursor_idx: Option<usize>,
     scroll: usize,
@@ -476,9 +534,9 @@ fn render_pane_list<'a>(
 
     for i in scroll..end {
         let (name, node) = &children[i];
-        let section = top_level_section(state_path, name);
-        let color = section_color(&section);
+        let color = node_name_color(node);
         let (icon, icon_color) = node_icon(node);
+        let is_branch = matches!(node, ConfigNode::Branch(_));
 
         let is_cursor = cursor_idx == Some(i);
         let is_highlight = highlight_name == Some(name.as_str());
@@ -491,7 +549,7 @@ fn render_pane_list<'a>(
             Color::Reset
         };
 
-        let name_mod = if is_cursor || is_highlight {
+        let name_mod = if is_cursor || is_highlight || is_branch {
             Modifier::BOLD
         } else {
             Modifier::empty()
@@ -553,57 +611,116 @@ fn render_pane_list<'a>(
     lines
 }
 
-/// Render a search result line with match highlighting.
+/// Render a search result line with icon, parent segments in bold blue,
+/// leaf segment in type color, and match highlighting overlay.
 fn render_search_result_line<'a>(
     path: &[String],
     query: &str,
     is_selected: bool,
     _width: u16,
+    node: Option<&ConfigNode>,
 ) -> Line<'a> {
-    let section = path.first().map(|s| s.as_str()).unwrap_or("");
-    let color = section_color(section);
+    let (icon, icon_color) = node.map(node_icon).unwrap_or(("?", COMMENT));
+    let leaf_color = node.map(node_name_color).unwrap_or(FG);
     let bg = if is_selected { CURSOR_BG } else { Color::Reset };
-    let bold = if is_selected {
-        Modifier::BOLD
-    } else {
-        Modifier::empty()
-    };
 
     let display = path.join(".");
     let lower_display = display.to_lowercase();
     let lower_query = query.to_lowercase();
 
-    if !lower_query.is_empty() {
-        if let Some(start) = lower_display.find(&lower_query) {
-            let end = start + query.len();
-            let mut spans = Vec::new();
-            if start > 0 {
-                spans.push(Span::styled(
-                    display[..start].to_string(),
-                    Style::default().fg(color).bg(bg).add_modifier(bold),
-                ));
-            }
-            spans.push(Span::styled(
-                display[start..end].to_string(),
+    let highlight: Option<(usize, usize)> = if !lower_query.is_empty() {
+        lower_display
+            .find(&lower_query)
+            .map(|s| (s, s + query.len()))
+    } else {
+        None
+    };
+
+    let mut spans: Vec<Span<'a>> = vec![
+        Span::styled(format!("{} ", icon), Style::default().fg(icon_color).bg(bg)),
+    ];
+
+    // Render segment by segment: parents in bold blue, last in type color
+    let mut pos: usize = 0;
+    for (seg_idx, seg) in path.iter().enumerate() {
+        if seg_idx > 0 {
+            // Dot separator
+            let dot_in_hl = highlight
+                .map(|(hs, he)| pos >= hs && pos < he)
+                .unwrap_or(false);
+            let dot_style = if dot_in_hl {
                 Style::default()
                     .fg(Color::White)
                     .bg(HIGHLIGHT_BG)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            if end < display.len() {
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(COMMENT).bg(bg)
+            };
+            spans.push(Span::styled(".", dot_style));
+            pos += 1;
+        }
+
+        let is_last = seg_idx == path.len() - 1;
+        let seg_color = if is_last { leaf_color } else { BLUE };
+        let seg_mod = Modifier::BOLD; // bold for both parents and leaf
+
+        let seg_start = pos;
+        let seg_end = pos + seg.len();
+
+        if let Some((hs, he)) = highlight {
+            if hs < seg_end && he > seg_start {
+                // Overlap with highlight
+                let hl_start = hs.max(seg_start) - seg_start;
+                let hl_end = he.min(seg_end) - seg_start;
+
+                if hl_start > 0 {
+                    spans.push(Span::styled(
+                        seg[..hl_start].to_string(),
+                        Style::default()
+                            .fg(seg_color)
+                            .bg(bg)
+                            .add_modifier(seg_mod),
+                    ));
+                }
                 spans.push(Span::styled(
-                    display[end..].to_string(),
-                    Style::default().fg(color).bg(bg).add_modifier(bold),
+                    seg[hl_start..hl_end].to_string(),
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(HIGHLIGHT_BG)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                if hl_end < seg.len() {
+                    spans.push(Span::styled(
+                        seg[hl_end..].to_string(),
+                        Style::default()
+                            .fg(seg_color)
+                            .bg(bg)
+                            .add_modifier(seg_mod),
+                    ));
+                }
+            } else {
+                spans.push(Span::styled(
+                    seg.clone(),
+                    Style::default()
+                        .fg(seg_color)
+                        .bg(bg)
+                        .add_modifier(seg_mod),
                 ));
             }
-            return Line::from(spans);
+        } else {
+            spans.push(Span::styled(
+                seg.clone(),
+                Style::default()
+                    .fg(seg_color)
+                    .bg(bg)
+                    .add_modifier(seg_mod),
+            ));
         }
+
+        pos = seg_end;
     }
 
-    Line::from(Span::styled(
-        display,
-        Style::default().fg(color).bg(bg).add_modifier(bold),
-    ))
+    Line::from(spans)
 }
 
 // ---------------------------------------------------------------------------
@@ -618,21 +735,20 @@ fn render_detail_info<'a>(
     visible_height: usize,
 ) -> Vec<Line<'a>> {
     let width = inner_width as usize;
-    let section = if full_path.is_empty() {
-        ""
-    } else {
-        &full_path[0]
-    };
-    let path_color = section_color(section);
+    let (icon, icon_color) = node_icon(node);
+    let path_color = node_name_color(node);
 
     let mut content: Vec<Line<'a>> = Vec::new();
 
-    content.push(Line::from(Span::styled(
-        full_path.join("."),
-        Style::default()
-            .fg(path_color)
-            .add_modifier(Modifier::BOLD),
-    )));
+    content.push(Line::from(vec![
+        Span::styled(format!("{} ", icon), Style::default().fg(icon_color)),
+        Span::styled(
+            full_path.join("."),
+            Style::default()
+                .fg(path_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
     content.push(Line::from(""));
 
     let divider = "\u{2500}".repeat(width.min(30));
@@ -691,8 +807,6 @@ fn render_dep_list<'a>(
     let mut lines = Vec::new();
     for i in scroll..end {
         let dep = &items[i];
-        let dep_section = dep.split('.').next().unwrap_or("");
-        let dep_color = section_color(dep_section);
         let is_selected = cursor == Some(i);
         let bg = if is_selected { CURSOR_BG } else { Color::Reset };
         let prefix = if is_selected { "> " } else { "  " };
@@ -701,7 +815,7 @@ fn render_dep_list<'a>(
             Span::styled(
                 dep.to_string(),
                 Style::default()
-                    .fg(dep_color)
+                    .fg(FG)
                     .bg(bg)
                     .add_modifier(if is_selected {
                         Modifier::BOLD
@@ -728,22 +842,21 @@ fn render_search_detail<'a>(
 ) -> Vec<Line<'a>> {
     let width = inner_width as usize;
     let path_str = full_path.join(".");
-    let section = if full_path.is_empty() {
-        ""
-    } else {
-        &full_path[0]
-    };
-    let path_color = section_color(section);
+    let (icon, icon_color) = node_icon(node);
+    let path_color = node_name_color(node);
     let divider = "\u{2500}".repeat(width.min(30));
 
     let mut content: Vec<Line<'a>> = Vec::new();
 
-    content.push(Line::from(Span::styled(
-        path_str.clone(),
-        Style::default()
-            .fg(path_color)
-            .add_modifier(Modifier::BOLD),
-    )));
+    content.push(Line::from(vec![
+        Span::styled(format!("{} ", icon), Style::default().fg(icon_color)),
+        Span::styled(
+            path_str.clone(),
+            Style::default()
+                .fg(path_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
     content.push(Line::from(""));
 
     content.push(Line::from(Span::styled(
@@ -791,10 +904,9 @@ fn render_search_detail<'a>(
         )));
     } else {
         for dep in &dep_items {
-            let ds = dep.split('.').next().unwrap_or("");
             content.push(Line::from(Span::styled(
                 format!("  {}", dep),
-                Style::default().fg(section_color(ds)),
+                Style::default().fg(FG),
             )));
         }
     }
@@ -821,10 +933,9 @@ fn render_search_detail<'a>(
         )));
     } else {
         for dep in &rev_items {
-            let ds = dep.split('.').next().unwrap_or("");
             content.push(Line::from(Span::styled(
                 format!("  {}", dep),
-                Style::default().fg(section_color(ds)),
+                Style::default().fg(FG),
             )));
         }
     }
@@ -836,41 +947,6 @@ fn render_search_detail<'a>(
         result.push(Line::from(""));
     }
     result
-}
-
-fn deps_total_count(path_str: &str, deps_index: &DepsIndex) -> usize {
-    let d = deps_index
-        .dependencies
-        .get(path_str)
-        .map(|v| v.len())
-        .unwrap_or(0);
-    let r = deps_index
-        .dependents
-        .get(path_str)
-        .map(|v| v.len())
-        .unwrap_or(0);
-    d + r
-}
-
-fn dep_item_at(path_str: &str, deps_index: &DepsIndex, cursor: usize) -> Option<Vec<String>> {
-    let deps: Vec<&String> = deps_index
-        .dependencies
-        .get(path_str)
-        .map(|v| v.iter().collect())
-        .unwrap_or_default();
-    let revs: Vec<&String> = deps_index
-        .dependents
-        .get(path_str)
-        .map(|v| v.iter().collect())
-        .unwrap_or_default();
-
-    if cursor < deps.len() {
-        Some(deps[cursor].split('.').map(|s| s.to_string()).collect())
-    } else {
-        let rev_idx = cursor - deps.len();
-        revs.get(rev_idx)
-            .map(|s| s.split('.').map(|p| p.to_string()).collect())
-    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -919,19 +995,26 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("Navigation", ""),
     ("j / \u{2193}", "Move cursor down"),
     ("k / \u{2191}", "Move cursor up"),
-    ("l / \u{2192} / Enter", "Drill into branch"),
-    ("h / \u{2190}", "Go back one level"),
+    ("l / \u{2192} / Enter", "Drill into branch / view leaf"),
+    ("h / \u{2190} / Esc", "Go back one level"),
     ("g / Home", "Jump to top"),
     ("G / End", "Jump to bottom"),
     ("PageDown / PageUp", "Page scroll"),
     ("", ""),
     ("Info Panes", ""),
-    ("J / K", "Scroll detail pane down/up"),
-    ("d", "Focus dependencies/dependents"),
-    ("j / k (in deps)", "Navigate deps/dependents"),
-    ("Enter (in deps)", "Jump to dependency"),
-    ("Esc / h (in deps)", "Return to browse pane"),
-    ("PageDown/Up (in deps)", "Page through deps"),
+    ("b", "Focus Browse pane"),
+    ("d", "Focus Detail pane"),
+    ("p", "Focus Dependencies pane"),
+    ("n", "Focus Dependents pane"),
+    ("J / K", "Quick-scroll detail"),
+    ("j / k (in pane)", "Navigate / scroll"),
+    ("Enter (in deps/revs)", "Jump to dependency"),
+    ("Esc / h (in pane)", "Return to browse"),
+    ("", ""),
+    ("Value Pager", ""),
+    ("Enter / \u{2192} on leaf", "Open fullscreen pager"),
+    ("j / k / \u{2191}\u{2193}", "Scroll value"),
+    ("Esc / h / \u{2190}", "Close pager"),
     ("", ""),
     ("Search", ""),
     ("/", "Open search"),
@@ -958,7 +1041,7 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                 .iter()
                 .map(|(k, v)| (k.clone(), build_config_tree(v)))
                 .collect();
-            children.sort_by(|(a, _), (b, _)| a.cmp(b));
+            sort_branches_first(&mut children);
             children
         }
         _ => vec![("config".to_string(), build_config_tree(&json))],
@@ -1007,6 +1090,65 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
             let screen_width = size.width;
 
             match &mode {
+                // =============================================================
+                // Pager layout (fullscreen value viewer)
+                // =============================================================
+                Mode::Pager {
+                    path,
+                    lines: pager_lines,
+                    scroll: p_scroll,
+                    color: p_color,
+                } => {
+                    let outer = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Min(1), Constraint::Length(1)])
+                        .split(size);
+
+                    let title = path.join(".");
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(BLUE))
+                        .title(Span::styled(
+                            format!(" {} ", title),
+                            Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
+                        ));
+                    let inner = block.inner(outer[0]);
+                    let h = inner.height as usize;
+
+                    let sc = (*p_scroll).min(pager_lines.len().saturating_sub(1));
+                    let end = pager_lines.len().min(sc + h);
+                    let mut content_lines: Vec<Line> = Vec::new();
+                    for i in sc..end {
+                        content_lines.push(Line::from(Span::styled(
+                            pager_lines[i].clone(),
+                            Style::default().fg(*p_color),
+                        )));
+                    }
+                    while content_lines.len() < h {
+                        content_lines.push(Line::from(""));
+                    }
+
+                    frame.render_widget(block, outer[0]);
+                    frame.render_widget(Paragraph::new(content_lines), inner);
+
+                    // Footer
+                    let total = pager_lines.len();
+                    let mut footer_spans = vec![Span::raw(" ")];
+                    footer_spans.extend(footer_pill("j/k", "scroll"));
+                    footer_spans.extend(footer_pill("g/G", "top/bottom"));
+                    footer_spans.extend(footer_pill("Esc", "back"));
+                    footer_spans.push(Span::styled(
+                        format!("[{}/{}]", sc + 1, total.max(1)),
+                        Style::default().fg(COMMENT),
+                    ));
+                    frame.render_widget(
+                        Paragraph::new(Line::from(footer_spans))
+                            .style(Style::default().bg(HEADER_BG)),
+                        outer[1],
+                    );
+                }
+
                 // =============================================================
                 // Search layout
                 // =============================================================
@@ -1064,11 +1206,13 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
 
                     let mut result_lines = Vec::new();
                     for i in sc..end {
+                        let node = lookup_node(&root_children, &results[i]);
                         result_lines.push(render_search_result_line(
                             &results[i],
                             query,
                             i == cu,
                             results_width,
+                            node,
                         ));
                     }
                     while result_lines.len() < results_height {
@@ -1144,7 +1288,13 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                         ])
                         .split(size);
 
-                    // ---- Header ----
+                    // ---- Header / Breadcrumb ----
+                    let selected: Option<(&str, &ConfigNode)> =
+                        middle_children.and_then(|ch| {
+                            ch.get(state.cursor)
+                                .map(|(n, node)| (n.as_str(), node))
+                        });
+
                     let mut header_spans: Vec<Span> = vec![Span::styled(
                         format!(" {} ", config),
                         Style::default().fg(FG).add_modifier(Modifier::BOLD),
@@ -1152,22 +1302,41 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                     if !state.path.is_empty() {
                         header_spans.push(Span::styled(" ", Style::default()));
                         for (i, seg) in state.path.iter().enumerate() {
-                            let seg_section = if i == 0 {
-                                seg.as_str()
-                            } else {
-                                state.path[0].as_str()
-                            };
                             if i > 0 {
                                 header_spans.push(Span::styled(
                                     ".",
                                     Style::default().fg(COMMENT),
                                 ));
                             }
+                            // Path segments are always branches
                             header_spans.push(Span::styled(
                                 seg.clone(),
-                                Style::default().fg(section_color(seg_section)),
+                                Style::default()
+                                    .fg(BLUE)
+                                    .add_modifier(Modifier::BOLD),
                             ));
                         }
+                    }
+                    // Append currently selected item to breadcrumb
+                    if let Some((name, node)) = selected {
+                        if state.path.is_empty() {
+                            header_spans.push(Span::styled(" ", Style::default()));
+                        } else {
+                            header_spans.push(Span::styled(
+                                ".",
+                                Style::default().fg(COMMENT),
+                            ));
+                        }
+                        let nc = node_name_color(node);
+                        let nm = if matches!(node, ConfigNode::Branch(_)) {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        };
+                        header_spans.push(Span::styled(
+                            name.to_string(),
+                            Style::default().fg(nc).add_modifier(nm),
+                        ));
                     }
                     frame.render_widget(
                         Paragraph::new(Line::from(header_spans))
@@ -1207,7 +1376,6 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                                 .unwrap_or(0);
                             render_pane_list(
                                 parent_children,
-                                parent_path,
                                 highlight,
                                 None,
                                 left_scroll,
@@ -1223,7 +1391,7 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
 
                     // Browse
                     let middle_active = state.focus == Focus::Middle;
-                    let middle_block = make_block("Browse", middle_active);
+                    let middle_block = make_block_keyed("Browse", None, 'b', middle_active);
                     let middle_inner = middle_block.inner(top[1]);
                     let middle_height = middle_inner.height as usize;
                     let middle_width = middle_inner.width;
@@ -1237,7 +1405,6 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                         );
                         render_pane_list(
                             children,
-                            &state.path,
                             None,
                             Some(state.cursor),
                             state.scroll,
@@ -1256,22 +1423,10 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                     let children_height = children_inner.height as usize;
                     let children_width = children_inner.width;
 
-                    let selected: Option<(&str, &ConfigNode)> =
-                        middle_children.and_then(|ch| {
-                            ch.get(state.cursor)
-                                .map(|(n, node)| (n.as_str(), node))
-                        });
-
                     let children_lines =
-                        if let Some((name, ConfigNode::Branch(ch))) = selected {
-                            let preview_path = {
-                                let mut p = state.path.clone();
-                                p.push(name.to_string());
-                                p
-                            };
+                        if let Some((_name, ConfigNode::Branch(ch))) = selected {
                             render_pane_list(
                                 ch,
-                                &preview_path,
                                 None,
                                 None,
                                 0,
@@ -1305,8 +1460,11 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                         .cloned()
                         .unwrap_or_default();
                     let dep_count = dep_items.len();
+                    let rev_count = rev_items.len();
 
-                    let deps_focus = state.focus == Focus::Deps;
+                    let detail_active = state.focus == Focus::Detail;
+                    let deps_active = state.focus == Focus::Deps;
+                    let revs_active = state.focus == Focus::Revs;
 
                     let narrow = screen_width < 110;
 
@@ -1321,7 +1479,7 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                             .split(outer[2]);
 
                         // Detail
-                        let detail_block = make_block("Detail", false);
+                        let detail_block = make_block_keyed("Detail", None, 'd', detail_active);
                         let detail_inner = detail_block.inner(bottom[0]);
                         let detail_height = detail_inner.height as usize;
                         let detail_width = detail_inner.width;
@@ -1349,34 +1507,30 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                             .split(bottom[1]);
 
                         // Dependencies
-                        let deps_cursor = if deps_focus && state.deps_cursor < dep_count {
+                        let deps_cursor_val = if deps_active {
                             Some(state.deps_cursor)
                         } else {
                             None
                         };
-                        let deps_active = deps_focus && deps_cursor.is_some();
-                        let deps_title = format!("Dependencies ({})", dep_count);
-                        let deps_block = make_block(&deps_title, deps_active);
+                        let deps_block = make_block_keyed("Dependencies", Some(dep_count), 'p', deps_active);
                         let deps_inner = deps_block.inner(right_stack[0]);
                         let deps_height = deps_inner.height as usize;
                         let deps_lines =
-                            render_dep_list(&dep_items, deps_cursor, 0, deps_height);
+                            render_dep_list(&dep_items, deps_cursor_val, 0, deps_height);
                         frame.render_widget(deps_block, right_stack[0]);
                         frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
                         // Dependents
-                        let rev_cursor = if deps_focus && state.deps_cursor >= dep_count {
-                            Some(state.deps_cursor - dep_count)
+                        let revs_cursor_val = if revs_active {
+                            Some(state.deps_cursor)
                         } else {
                             None
                         };
-                        let rev_active = deps_focus && rev_cursor.is_some();
-                        let rev_title = format!("Dependents ({})", rev_items.len());
-                        let rev_block = make_block(&rev_title, rev_active);
+                        let rev_block = make_block_keyed("Dependents", Some(rev_count), 'n', revs_active);
                         let rev_inner = rev_block.inner(right_stack[1]);
                         let rev_height = rev_inner.height as usize;
                         let rev_lines =
-                            render_dep_list(&rev_items, rev_cursor, 0, rev_height);
+                            render_dep_list(&rev_items, revs_cursor_val, 0, rev_height);
                         frame.render_widget(rev_block, right_stack[1]);
                         frame.render_widget(Paragraph::new(rev_lines), rev_inner);
                     } else {
@@ -1391,7 +1545,7 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                             .split(outer[2]);
 
                         // Detail
-                        let detail_block = make_block("Detail", false);
+                        let detail_block = make_block_keyed("Detail", None, 'd', detail_active);
                         let detail_inner = detail_block.inner(bottom[0]);
                         let detail_height = detail_inner.height as usize;
                         let detail_width = detail_inner.width;
@@ -1410,34 +1564,30 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                         frame.render_widget(Paragraph::new(detail_lines), detail_inner);
 
                         // Dependencies
-                        let deps_cursor = if deps_focus && state.deps_cursor < dep_count {
+                        let deps_cursor_val = if deps_active {
                             Some(state.deps_cursor)
                         } else {
                             None
                         };
-                        let deps_active = deps_focus && deps_cursor.is_some();
-                        let deps_title = format!("Dependencies ({})", dep_count);
-                        let deps_block = make_block(&deps_title, deps_active);
+                        let deps_block = make_block_keyed("Dependencies", Some(dep_count), 'p', deps_active);
                         let deps_inner = deps_block.inner(bottom[1]);
                         let deps_height = deps_inner.height as usize;
                         let deps_lines =
-                            render_dep_list(&dep_items, deps_cursor, 0, deps_height);
+                            render_dep_list(&dep_items, deps_cursor_val, 0, deps_height);
                         frame.render_widget(deps_block, bottom[1]);
                         frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
                         // Dependents
-                        let rev_cursor = if deps_focus && state.deps_cursor >= dep_count {
-                            Some(state.deps_cursor - dep_count)
+                        let revs_cursor_val = if revs_active {
+                            Some(state.deps_cursor)
                         } else {
                             None
                         };
-                        let rev_active = deps_focus && rev_cursor.is_some();
-                        let rev_title = format!("Dependents ({})", rev_items.len());
-                        let rev_block = make_block(&rev_title, rev_active);
+                        let rev_block = make_block_keyed("Dependents", Some(rev_count), 'n', revs_active);
                         let rev_inner = rev_block.inner(bottom[2]);
                         let rev_height = rev_inner.height as usize;
                         let rev_lines =
-                            render_dep_list(&rev_items, rev_cursor, 0, rev_height);
+                            render_dep_list(&rev_items, revs_cursor_val, 0, rev_height);
                         frame.render_widget(rev_block, bottom[2]);
                         frame.render_widget(Paragraph::new(rev_lines), rev_inner);
                     }
@@ -1457,7 +1607,6 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                         spans.extend(footer_pill("\u{2191}\u{2193}", "move"));
                         spans.extend(footer_pill("\u{2190}\u{2192}", "in/out"));
                         spans.extend(footer_pill("/", "search"));
-                        spans.extend(footer_pill("d", "deps"));
                         spans.extend(footer_pill("?", "help"));
                         spans.extend(footer_pill("q", "quit"));
                         spans.push(Span::styled(pos, Style::default().fg(COMMENT)));
@@ -1533,6 +1682,13 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
 
         let key = tui::read_key()?;
 
+        // Global Ctrl-C quit from any mode
+        if key.code == KeyCode::Char('c')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            break;
+        }
+
         match &mut mode {
             Mode::Help => match key.code {
                 KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => {
@@ -1541,9 +1697,47 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                 _ => {}
             },
 
+            Mode::Pager {
+                lines: pager_lines,
+                scroll: p_scroll,
+                ..
+            } => match key.code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if *p_scroll + 1 < pager_lines.len() {
+                        *p_scroll += 1;
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    *p_scroll = p_scroll.saturating_sub(1);
+                }
+                KeyCode::Char('g') | KeyCode::Home => {
+                    *p_scroll = 0;
+                }
+                KeyCode::Char('G') | KeyCode::End => {
+                    *p_scroll = pager_lines.len().saturating_sub(1);
+                }
+                KeyCode::PageDown => {
+                    let page = terminal.size()?.height.saturating_sub(4) as usize;
+                    *p_scroll =
+                        (*p_scroll + page).min(pager_lines.len().saturating_sub(1));
+                }
+                KeyCode::PageUp => {
+                    let page = terminal.size()?.height.saturating_sub(4) as usize;
+                    *p_scroll = p_scroll.saturating_sub(page);
+                }
+                KeyCode::Esc
+                | KeyCode::Char('q')
+                | KeyCode::Char('h')
+                | KeyCode::Left
+                | KeyCode::Backspace => {
+                    mode = Mode::Normal;
+                }
+                _ => {}
+            },
+
             Mode::Normal => {
                 status_msg = None;
-                if tui::is_quit(&key) {
+                if key.code == KeyCode::Char('q') {
                     break;
                 }
 
@@ -1591,26 +1785,40 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                                 get_children_at_path(&root_children, &state.path)
                             {
                                 if let Some((name, node)) = children.get(state.cursor) {
-                                    if matches!(node, ConfigNode::Branch(_)) {
-                                        state.path_memory.insert(
-                                            state.path.clone(),
-                                            (state.cursor, state.scroll),
-                                        );
-                                        state.path.push(name.clone());
-                                        let (c, s) = state
-                                            .path_memory
-                                            .get(&state.path)
-                                            .copied()
-                                            .unwrap_or((0, 0));
-                                        state.cursor = c;
-                                        state.scroll = s;
-                                        state.detail_scroll = 0;
-                                        state.deps_cursor = 0;
+                                    match node {
+                                        ConfigNode::Branch(_) => {
+                                            state.path_memory.insert(
+                                                state.path.clone(),
+                                                (state.cursor, state.scroll),
+                                            );
+                                            state.path.push(name.clone());
+                                            let (c, s) = state
+                                                .path_memory
+                                                .get(&state.path)
+                                                .copied()
+                                                .unwrap_or((0, 0));
+                                            state.cursor = c;
+                                            state.scroll = s;
+                                            state.detail_scroll = 0;
+                                            state.deps_cursor = 0;
+                                        }
+                                        ConfigNode::Leaf(val) => {
+                                            let mut full = state.path.clone();
+                                            full.push(name.clone());
+                                            let lines = format_value_full(val);
+                                            let color = value_color(val);
+                                            mode = Mode::Pager {
+                                                path: full,
+                                                lines,
+                                                scroll: 0,
+                                                color,
+                                            };
+                                        }
                                     }
                                 }
                             }
                         }
-                        KeyCode::Char('h') | KeyCode::Left => {
+                        KeyCode::Char('h') | KeyCode::Left | KeyCode::Esc => {
                             if !state.path.is_empty() {
                                 state.path_memory.insert(
                                     state.path.clone(),
@@ -1629,7 +1837,14 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                             }
                         }
                         KeyCode::Char('d') => {
+                            state.focus = Focus::Detail;
+                        }
+                        KeyCode::Char('p') => {
                             state.focus = Focus::Deps;
+                            state.deps_cursor = 0;
+                        }
+                        KeyCode::Char('n') => {
+                            state.focus = Focus::Revs;
                             state.deps_cursor = 0;
                         }
                         KeyCode::Char('J') => {
@@ -1652,20 +1867,49 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                         _ => {}
                     },
 
+                    Focus::Detail => match key.code {
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            state.detail_scroll += 1;
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            state.detail_scroll =
+                                state.detail_scroll.saturating_sub(1);
+                        }
+                        KeyCode::PageDown => {
+                            let page =
+                                terminal.size()?.height.saturating_sub(8) as usize;
+                            state.detail_scroll += page;
+                        }
+                        KeyCode::PageUp => {
+                            let page =
+                                terminal.size()?.height.saturating_sub(8) as usize;
+                            state.detail_scroll =
+                                state.detail_scroll.saturating_sub(page);
+                        }
+                        KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left
+                        | KeyCode::Char('b') => {
+                            state.focus = Focus::Middle;
+                        }
+                        KeyCode::Char('p') => {
+                            state.focus = Focus::Deps;
+                            state.deps_cursor = 0;
+                        }
+                        KeyCode::Char('n') => {
+                            state.focus = Focus::Revs;
+                            state.deps_cursor = 0;
+                        }
+                        _ => {}
+                    },
+
                     Focus::Deps => {
-                        let full_path: Vec<String> = {
-                            let mut p = state.path.clone();
-                            if let Some(children) =
-                                get_children_at_path(&root_children, &state.path)
-                            {
-                                if let Some((name, _)) = children.get(state.cursor) {
-                                    p.push(name.clone());
-                                }
-                            }
-                            p
-                        };
+                        let full_path = current_full_path(&state, &root_children);
                         let path_str = full_path.join(".");
-                        let total = deps_total_count(&path_str, &deps_index);
+                        let dep_items: Vec<String> = deps_index
+                            .dependencies
+                            .get(&path_str)
+                            .cloned()
+                            .unwrap_or_default();
+                        let total = dep_items.len();
 
                         match key.code {
                             KeyCode::Char('j') | KeyCode::Down => {
@@ -1674,13 +1918,14 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                                 }
                             }
                             KeyCode::Char('k') | KeyCode::Up => {
-                                state.deps_cursor = state.deps_cursor.saturating_sub(1);
+                                state.deps_cursor =
+                                    state.deps_cursor.saturating_sub(1);
                             }
                             KeyCode::PageDown => {
                                 let page =
                                     terminal.size()?.height.saturating_sub(8) as usize;
-                                state.deps_cursor =
-                                    (state.deps_cursor + page).min(total.saturating_sub(1));
+                                state.deps_cursor = (state.deps_cursor + page)
+                                    .min(total.saturating_sub(1));
                             }
                             KeyCode::PageUp => {
                                 let page =
@@ -1689,22 +1934,96 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
                                     state.deps_cursor.saturating_sub(page);
                             }
                             KeyCode::Enter => {
-                                if let Some(target) = dep_item_at(
-                                    &path_str,
-                                    &deps_index,
-                                    state.deps_cursor,
-                                ) {
-                                    jump_to_path(&mut state, &target, &root_children);
-                                    status_msg =
-                                        Some(format!("Jumped to {}", target.join(".")));
+                                if state.deps_cursor < total {
+                                    let target: Vec<String> = dep_items
+                                        [state.deps_cursor]
+                                        .split('.')
+                                        .map(|s| s.to_string())
+                                        .collect();
+                                    let msg =
+                                        format!("Jumped to {}", target.join("."));
+                                    jump_to_path(
+                                        &mut state,
+                                        &target,
+                                        &root_children,
+                                    );
+                                    status_msg = Some(msg);
                                 }
                             }
-                            KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => {
+                            KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left
+                            | KeyCode::Char('b') => {
                                 state.focus = Focus::Middle;
                             }
-                            KeyCode::Char('q') => {
-                                tui::teardown(terminal)?;
-                                return Ok(());
+                            KeyCode::Char('d') => {
+                                state.focus = Focus::Detail;
+                            }
+                            KeyCode::Char('n') => {
+                                state.focus = Focus::Revs;
+                                state.deps_cursor = 0;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    Focus::Revs => {
+                        let full_path = current_full_path(&state, &root_children);
+                        let path_str = full_path.join(".");
+                        let rev_items: Vec<String> = deps_index
+                            .dependents
+                            .get(&path_str)
+                            .cloned()
+                            .unwrap_or_default();
+                        let total = rev_items.len();
+
+                        match key.code {
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                if total > 0 && state.deps_cursor + 1 < total {
+                                    state.deps_cursor += 1;
+                                }
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                state.deps_cursor =
+                                    state.deps_cursor.saturating_sub(1);
+                            }
+                            KeyCode::PageDown => {
+                                let page =
+                                    terminal.size()?.height.saturating_sub(8) as usize;
+                                state.deps_cursor = (state.deps_cursor + page)
+                                    .min(total.saturating_sub(1));
+                            }
+                            KeyCode::PageUp => {
+                                let page =
+                                    terminal.size()?.height.saturating_sub(8) as usize;
+                                state.deps_cursor =
+                                    state.deps_cursor.saturating_sub(page);
+                            }
+                            KeyCode::Enter => {
+                                if state.deps_cursor < total {
+                                    let target: Vec<String> = rev_items
+                                        [state.deps_cursor]
+                                        .split('.')
+                                        .map(|s| s.to_string())
+                                        .collect();
+                                    let msg =
+                                        format!("Jumped to {}", target.join("."));
+                                    jump_to_path(
+                                        &mut state,
+                                        &target,
+                                        &root_children,
+                                    );
+                                    status_msg = Some(msg);
+                                }
+                            }
+                            KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left
+                            | KeyCode::Char('b') => {
+                                state.focus = Focus::Middle;
+                            }
+                            KeyCode::Char('d') => {
+                                state.focus = Focus::Detail;
+                            }
+                            KeyCode::Char('p') => {
+                                state.focus = Focus::Deps;
+                                state.deps_cursor = 0;
                             }
                             _ => {}
                         }
