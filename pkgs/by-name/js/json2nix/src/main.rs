@@ -39,13 +39,16 @@ fn emit_bindings(map: &Map<String, Value>) -> String {
 /// Emit a single binding, collapsing single-key objects into dot notation.
 fn emit_binding(prefix: &str, value: &Value) -> String {
     match value {
-        Value::Object(map) if map.len() == 1 => {
-            let (k, v) = map.iter().next().unwrap();
-            emit_binding(&format!("{}.{}", prefix, quote_key(k)), v)
-        }
         Value::Object(map) => {
-            format!("{} = {{ {} }};", prefix, emit_bindings(map))
+            let mut out = String::new();
+            for (k, v) in map {
+                out.push_str(&emit_binding(&format!("{}.{}", prefix, quote_key(k)), v));
+            }
+            out
         }
+        // Value::Object(map) => {
+        //     format!("{} = {{ {} }};", prefix, emit_bindings(map))
+        // }
         other => {
             format!("{} = {};", prefix, format_value(other))
         }
@@ -58,7 +61,20 @@ fn format_value(value: &Value) -> String {
         Value::Null => "null".into(),
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => n.to_string(),
-        Value::String(s) => format!("\"{}\"", nix_escape(s)),
+        Value::String(s) => {
+            if s.contains('\n') {
+                let mut out = String::new();
+                out.push_str("''\n");
+                for i in s.lines() {
+                    out.push_str(&nix_escape_indented(i));
+                    out.push_str("\n")
+                }
+                out.push_str("''");
+                out
+            } else {
+                format!("\"{}\"", nix_escape(s))
+            }
+        },
         Value::Array(arr) if arr.is_empty() => "[ ]".into(),
         Value::Array(arr) => {
             let items: Vec<String> = arr.iter().map(format_value).collect();
@@ -76,6 +92,14 @@ fn nix_escape(s: &str) -> String {
         .replace('\t', "\\t")
         .replace('\r', "\\r")
         .replace("${", "\\${")
+}
+
+fn nix_escape_indented(s: &str) -> String {
+    if s.contains("''") {
+        format!("${{ \"{}\" }}", nix_escape(s))
+    } else {
+        s.replace('$', "''$")
+    }
 }
 
 /// Quote an attribute key for Nix.  Bare identifiers matching
