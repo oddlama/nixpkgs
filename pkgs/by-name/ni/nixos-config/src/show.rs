@@ -9,8 +9,8 @@ use crate::json2nix;
 use crate::resolve;
 use crate::tui;
 
-pub fn run(config: &str, explicit: bool, flat: bool) -> Result<()> {
-    let json = resolve::resolve(config, explicit)?;
+pub fn run(config: &str, explicit: bool, flat: bool, nix_args: &[String]) -> Result<()> {
+    let json = resolve::resolve(config, explicit, nix_args)?;
     let nix_text = json2nix::convert(&json, flat);
 
     if tui::is_tty() {

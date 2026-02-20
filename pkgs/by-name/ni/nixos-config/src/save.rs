@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use crate::json2nix;
 use crate::resolve;
 
-pub fn run(output_path: &str, config: &str, explicit: bool, flat: bool) -> Result<()> {
-    let json = resolve::resolve(config, explicit)?;
+pub fn run(output_path: &str, config: &str, explicit: bool, flat: bool, nix_args: &[String]) -> Result<()> {
+    let json = resolve::resolve(config, explicit, nix_args)?;
     let nix_text = json2nix::convert(&json, flat);
 
     if output_path == "/dev/stdout" || output_path == "-" {

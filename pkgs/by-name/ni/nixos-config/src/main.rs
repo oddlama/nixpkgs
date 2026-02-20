@@ -7,12 +7,16 @@ mod tree;
 mod tui;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// View, diff, and save NixOS tracked configurations.
 #[derive(Parser)]
 #[command(name = "nixos-config", version)]
 struct Cli {
+    /// Extra arguments passed to nix commands (e.g. --nix-arg=--impure)
+    #[arg(long = "nix-arg", global = true)]
+    nix_args: Vec<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -78,16 +82,28 @@ enum Commands {
         #[arg(long)]
         explicit: bool,
 
+        /// Color output mode
+        #[arg(long, value_enum, default_value_t = ColorMode::Auto)]
+        color: ColorMode,
+
         /// Configuration to browse (path or flake ref); defaults to /var/run/current-system
         #[arg(name = "CONFIG")]
         config: Option<String>,
     },
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum ColorMode {
+    Always,
+    Auto,
+    Never,
+}
+
 const DEFAULT_CONFIG: &str = "/var/run/current-system";
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let nix_args = &cli.nix_args;
 
     match cli.command {
         Commands::Diff {
@@ -106,7 +122,7 @@ fn main() -> Result<()> {
                 }
                 _ => unreachable!(),
             };
-            diff::run(&old_arg, &new_arg, explicit, exec.as_deref())
+            diff::run(&old_arg, &new_arg, explicit, exec.as_deref(), nix_args)
         }
         Commands::Show {
             explicit,
@@ -114,7 +130,7 @@ fn main() -> Result<()> {
             config,
         } => {
             let config = config.as_deref().unwrap_or(DEFAULT_CONFIG);
-            show::run(config, explicit, flat)
+            show::run(config, explicit, flat, nix_args)
         }
         Commands::Save {
             explicit,
@@ -123,11 +139,20 @@ fn main() -> Result<()> {
             config,
         } => {
             let config = config.as_deref().unwrap_or(DEFAULT_CONFIG);
-            save::run(&output, config, explicit, flat)
+            save::run(&output, config, explicit, flat, nix_args)
         }
-        Commands::Tree { explicit, config } => {
+        Commands::Tree {
+            explicit,
+            color,
+            config,
+        } => {
+            let use_color = match color {
+                ColorMode::Always => true,
+                ColorMode::Never => false,
+                ColorMode::Auto => tui::is_tty(),
+            };
             let config = config.as_deref().unwrap_or(DEFAULT_CONFIG);
-            tree::run(config, explicit)
+            tree::run(config, explicit, use_color, nix_args)
         }
     }
 }

@@ -18,9 +18,10 @@ pub fn run(
     new_arg: &str,
     explicit: bool,
     exec_cmd: Option<&str>,
+    nix_args: &[String],
 ) -> Result<()> {
-    let old_json = resolve::resolve(old_arg, explicit)?;
-    let new_json = resolve::resolve(new_arg, explicit)?;
+    let old_json = resolve::resolve(old_arg, explicit, nix_args)?;
+    let new_json = resolve::resolve(new_arg, explicit, nix_args)?;
     let old_nix = json2nix::convert(&old_json, true);
     let new_nix = json2nix::convert(&new_json, true);
 

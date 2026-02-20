@@ -1032,8 +1032,8 @@ const HELP_LINES: &[(&str, &str)] = &[
 // Main entry
 // ---------------------------------------------------------------------------
 
-pub fn run(config: &str, explicit: bool) -> Result<()> {
-    let json = resolve::resolve(config, explicit)?;
+pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -> Result<()> {
+    let json = resolve::resolve(config, explicit, nix_args)?;
 
     let root_children: Vec<(String, ConfigNode)> = match &json {
         Value::Object(map) => {
@@ -1047,12 +1047,12 @@ pub fn run(config: &str, explicit: bool) -> Result<()> {
         _ => vec![("config".to_string(), build_config_tree(&json))],
     };
 
-    if !tui::is_tty() {
+    if !use_color {
         print_tree_text(&root_children, 0);
         return Ok(());
     }
 
-    let deps_index = match resolve::resolve_deps(config) {
+    let deps_index = match resolve::resolve_deps(config, nix_args) {
         Ok(deps_json) => build_deps_index(&deps_json),
         Err(_) => DepsIndex {
             dependencies: HashMap::new(),
