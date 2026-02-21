@@ -138,10 +138,117 @@ fn resolve_flake(reference: &str, explicit: bool, nix_args: &[String]) -> Result
     bail!("Invalid flake reference: {}", reference);
 }
 
+pub struct CombinedResult {
+    pub config_values: Value,
+    pub filtered_deps: Value,
+}
+
+/// Resolve both config values and dependency data in a single evaluation.
+///
+/// For flake references this uses a single `nix eval --apply` call to avoid
+/// evaluating the NixOS configuration twice.
+pub fn resolve_combined(arg: &str, explicit: bool, nix_args: &[String]) -> Result<CombinedResult> {
+    let path = Path::new(arg);
+    if path.is_dir() {
+        return resolve_combined_dir(path, explicit);
+    }
+    if arg.contains('#') {
+        return resolve_combined_flake(arg, explicit, nix_args);
+    }
+    bail!(
+        "'{}' is not an existing directory or flake reference (flake refs must contain '#')",
+        arg
+    );
+}
+
+fn resolve_combined_dir(dir: &Path, explicit: bool) -> Result<CombinedResult> {
+    let config_values = resolve_dir(dir, explicit)?;
+    let filtered_deps = resolve_deps_dir(dir).unwrap_or(Value::Array(vec![]));
+    Ok(CombinedResult {
+        config_values,
+        filtered_deps,
+    })
+}
+
+fn resolve_combined_flake(reference: &str, explicit: bool, nix_args: &[String]) -> Result<CombinedResult> {
+    let field = if explicit {
+        "explicitConfigValues"
+    } else {
+        "configValues"
+    };
+
+    if let Some((flake, attr)) = reference.split_once('#') {
+        let nixos_config_ref = format!(
+            "{}#nixosConfigurations.{}.dependencyTracking",
+            flake, attr
+        );
+        let apply_expr = format!(
+            "t: {{ configValues = t.{}; filteredDeps = t.filteredDeps; }}",
+            field
+        );
+        eprintln!("Evaluating {}#{}...", flake, attr);
+
+        match nix_eval_apply_json(&nixos_config_ref, &apply_expr, nix_args) {
+            Ok(value) => {
+                let config_values = value.get("configValues").cloned()
+                    .unwrap_or(Value::Object(serde_json::Map::new()));
+                let filtered_deps = value.get("filteredDeps").cloned()
+                    .unwrap_or(Value::Array(vec![]));
+                return Ok(CombinedResult { config_values, filtered_deps });
+            }
+            Err(e) => eprintln!("  tried {} --apply: {:#}", nixos_config_ref, e),
+        }
+
+        // Fallback: try as-is
+        let direct_ref = format!("{}.dependencyTracking", reference);
+        let apply_expr = format!(
+            "t: {{ configValues = t.{}; filteredDeps = t.filteredDeps; }}",
+            field
+        );
+        match nix_eval_apply_json(&direct_ref, &apply_expr, nix_args) {
+            Ok(value) => {
+                let config_values = value.get("configValues").cloned()
+                    .unwrap_or(Value::Object(serde_json::Map::new()));
+                let filtered_deps = value.get("filteredDeps").cloned()
+                    .unwrap_or(Value::Array(vec![]));
+                return Ok(CombinedResult { config_values, filtered_deps });
+            }
+            Err(e) => eprintln!("  tried {} --apply: {:#}", direct_ref, e),
+        }
+
+        bail!(
+            "Could not evaluate tracking data for '{}'.\n\
+             Make sure the flake's nixosSystem is called with trackDependencies = true\n\
+             and uses a nixpkgs that supports dependency tracking.",
+            reference
+        );
+    }
+
+    bail!("Invalid flake reference: {}", reference);
+}
+
 /// Run `nix eval --json <ref>` and parse the result.
 fn nix_eval_json(reference: &str, extra_args: &[String]) -> Result<Value> {
     let mut cmd = Command::new("nix");
     cmd.args(["eval", "--json"]);
+    cmd.args(extra_args);
+    cmd.arg(reference);
+
+    let output = cmd.output().context("failed to run nix eval")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("nix eval failed: {}", stderr.trim());
+    }
+
+    let stdout = String::from_utf8(output.stdout).context("nix eval output not UTF-8")?;
+    serde_json::from_str(&stdout).context("parsing nix eval JSON output")
+}
+
+/// Run `nix eval --json --apply <expr> <ref>` and parse the result.
+fn nix_eval_apply_json(reference: &str, apply_expr: &str, extra_args: &[String]) -> Result<Value> {
+    let mut cmd = Command::new("nix");
+    cmd.args(["eval", "--json", "--apply", apply_expr]);
     cmd.args(extra_args);
     cmd.arg(reference);
 
