@@ -91,6 +91,25 @@ enum Commands {
         #[arg(name = "CONFIG")]
         config: Option<String>,
     },
+
+    /// Browse a diff of two NixOS configurations as an interactive tree
+    TreeDiff {
+        /// Use tracking-explicit.json (only explicitly defined values)
+        #[arg(long)]
+        explicit: bool,
+
+        /// Color output mode
+        #[arg(long, value_enum, default_value_t = ColorMode::Auto)]
+        color: ColorMode,
+
+        /// Old configuration (path or flake ref); defaults to /var/run/current-system
+        #[arg(name = "OLD")]
+        old: Option<String>,
+
+        /// New configuration (path or flake ref)
+        #[arg(name = "NEW")]
+        new: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -154,6 +173,27 @@ fn main() -> Result<()> {
             };
             let config = config.as_deref().unwrap_or(DEFAULT_CONFIG);
             tree::run(config, explicit, use_color, nix_args)
+        }
+        Commands::TreeDiff {
+            explicit,
+            color,
+            old,
+            new,
+        } => {
+            let use_color = match color {
+                ColorMode::Always => true,
+                ColorMode::Never => false,
+                ColorMode::Auto => tui::is_tty(),
+            };
+            let (old_arg, new_arg) = match (old, new) {
+                (Some(o), Some(n)) => (o, n),
+                (Some(n), None) => (DEFAULT_CONFIG.to_string(), n),
+                (None, None) => {
+                    anyhow::bail!("tree-diff requires at least one argument (NEW config)");
+                }
+                _ => unreachable!(),
+            };
+            tree::run_diff(&old_arg, &new_arg, explicit, use_color, nix_args)
         }
     }
 }

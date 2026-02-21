@@ -2,7 +2,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::theme::*;
-use super::types::ConfigNode;
+use super::types::{ConfigNode, DiffContext, DiffTag};
 use super::icons::*;
 use super::data::*;
 
@@ -17,6 +17,8 @@ pub(super) fn render_pane_list<'a>(
     scroll: usize,
     visible_height: usize,
     inner_width: u16,
+    diff_ctx: Option<&DiffContext>,
+    path_prefix: &[String],
 ) -> Vec<Line<'a>> {
     let width = inner_width as usize;
     if width < 4 {
@@ -37,10 +39,24 @@ pub(super) fn render_pane_list<'a>(
         let is_cursor = cursor_idx == Some(i);
         let is_highlight = highlight_name == Some(name.as_str());
 
+        // Determine diff background
+        let diff_bg = if let Some(ctx) = diff_ctx {
+            match get_diff_tag(ctx, path_prefix, name, node) {
+                DiffTag::Removed => Some(DIFF_DELETE_BG),
+                DiffTag::Added => Some(DIFF_INSERT_BG),
+                DiffTag::Modified => Some(DIFF_MODIFIED_BG),
+                DiffTag::Unchanged => None,
+            }
+        } else {
+            None
+        };
+
         let bg = if is_cursor {
             CURSOR_BG
         } else if is_highlight {
             PARENT_HIGHLIGHT_BG
+        } else if let Some(dbg) = diff_bg {
+            dbg
         } else {
             Color::Reset
         };
@@ -118,10 +134,31 @@ pub(super) fn render_search_result_line<'a>(
     is_selected: bool,
     _width: u16,
     node: Option<&ConfigNode>,
+    diff_ctx: Option<&DiffContext>,
 ) -> Line<'a> {
     let (icon, icon_color) = node.map(node_icon).unwrap_or(("?", COMMENT));
     let leaf_color = node.map(node_name_color).unwrap_or(FG);
-    let bg = if is_selected { CURSOR_BG } else { Color::Reset };
+
+    // Determine diff background for search results
+    let diff_bg = if let Some(ctx) = diff_ctx {
+        let dot_path = path.join(".");
+        match ctx.tags.get(&dot_path).copied().unwrap_or(DiffTag::Unchanged) {
+            DiffTag::Removed => Some(DIFF_DELETE_BG),
+            DiffTag::Added => Some(DIFF_INSERT_BG),
+            DiffTag::Modified => Some(DIFF_MODIFIED_BG),
+            DiffTag::Unchanged => None,
+        }
+    } else {
+        None
+    };
+
+    let bg = if is_selected {
+        CURSOR_BG
+    } else if let Some(dbg) = diff_bg {
+        dbg
+    } else {
+        Color::Reset
+    };
 
     let display = path.join(".");
     let lower_display = display.to_lowercase();
@@ -288,6 +325,192 @@ pub(super) fn render_detail_info<'a>(
     result
 }
 
+/// Render diff-aware detail info showing old and new values.
+pub(super) fn render_diff_detail_info<'a>(
+    full_path: &[String],
+    node: &ConfigNode,
+    diff_ctx: &DiffContext,
+    scroll: usize,
+    inner_width: u16,
+    visible_height: usize,
+) -> Vec<Line<'a>> {
+    let width = inner_width as usize;
+    let (icon, icon_color) = node_icon(node);
+    let path_color = node_name_color(node);
+    let dot_path = full_path.join(".");
+    let tag = diff_ctx.tags.get(&dot_path).copied().unwrap_or(DiffTag::Unchanged);
+
+    let mut content: Vec<Line<'a>> = Vec::new();
+
+    // Path header
+    content.push(Line::from(vec![
+        Span::styled(format!("{} ", icon), Style::default().fg(icon_color)),
+        Span::styled(
+            dot_path.clone(),
+            Style::default()
+                .fg(path_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    // Diff tag label
+    let (tag_label, tag_color) = match tag {
+        DiffTag::Added => ("[ADDED]", GREEN),
+        DiffTag::Removed => ("[REMOVED]", RED),
+        DiffTag::Modified => ("[MODIFIED]", BLUE),
+        DiffTag::Unchanged => ("[UNCHANGED]", COMMENT),
+    };
+    content.push(Line::from(Span::styled(
+        tag_label,
+        Style::default().fg(tag_color).add_modifier(Modifier::BOLD),
+    )));
+    content.push(Line::from(""));
+
+    let divider = "\u{2500}".repeat(width.min(30));
+
+    match tag {
+        DiffTag::Modified => {
+            // Old Value
+            content.push(Line::from(Span::styled(
+                "Old Value",
+                Style::default().fg(RED).add_modifier(Modifier::BOLD),
+            )));
+            content.push(Line::from(Span::styled(divider.clone(), Style::default().fg(COMMENT))));
+            if let Some(old_val) = diff_ctx.old_values.get(&dot_path) {
+                for line in format_value_full(old_val) {
+                    content.push(Line::from(Span::styled(line, Style::default().fg(RED))));
+                }
+            } else {
+                match node {
+                    ConfigNode::Branch(children) => {
+                        content.push(Line::from(Span::styled(
+                            format!("{} children", children.len()),
+                            Style::default().fg(COMMENT),
+                        )));
+                    }
+                    _ => {
+                        content.push(Line::from(Span::styled("(no old value)", Style::default().fg(COMMENT))));
+                    }
+                }
+            }
+            content.push(Line::from(""));
+
+            // New Value
+            content.push(Line::from(Span::styled(
+                "New Value",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            )));
+            content.push(Line::from(Span::styled(divider, Style::default().fg(COMMENT))));
+            if let Some(new_val) = diff_ctx.new_values.get(&dot_path) {
+                for line in format_value_full(new_val) {
+                    content.push(Line::from(Span::styled(line, Style::default().fg(GREEN))));
+                }
+            } else {
+                match node {
+                    ConfigNode::Branch(children) => {
+                        content.push(Line::from(Span::styled(
+                            format!("{} children", children.len()),
+                            Style::default().fg(COMMENT),
+                        )));
+                    }
+                    _ => {
+                        content.push(Line::from(Span::styled("(no new value)", Style::default().fg(COMMENT))));
+                    }
+                }
+            }
+        }
+        DiffTag::Added => {
+            content.push(Line::from(Span::styled(
+                "New Value",
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            )));
+            content.push(Line::from(Span::styled(divider, Style::default().fg(COMMENT))));
+            match node {
+                ConfigNode::Leaf(val) => {
+                    for line in format_value_full(val) {
+                        content.push(Line::from(Span::styled(line, Style::default().fg(GREEN))));
+                    }
+                }
+                ConfigNode::Branch(children) => {
+                    content.push(Line::from(Span::styled(
+                        format!("{} children", children.len()),
+                        Style::default().fg(COMMENT),
+                    )));
+                }
+                ConfigNode::Phantom => {
+                    content.push(Line::from(Span::styled("!", Style::default().fg(YELLOW))));
+                }
+            }
+        }
+        DiffTag::Removed => {
+            content.push(Line::from(Span::styled(
+                "Old Value",
+                Style::default().fg(RED).add_modifier(Modifier::BOLD),
+            )));
+            content.push(Line::from(Span::styled(divider, Style::default().fg(COMMENT))));
+            if let Some(old_val) = diff_ctx.old_values.get(&dot_path) {
+                for line in format_value_full(old_val) {
+                    content.push(Line::from(Span::styled(line, Style::default().fg(RED))));
+                }
+            } else {
+                match node {
+                    ConfigNode::Leaf(val) => {
+                        for line in format_value_full(val) {
+                            content.push(Line::from(Span::styled(line, Style::default().fg(RED))));
+                        }
+                    }
+                    ConfigNode::Branch(children) => {
+                        content.push(Line::from(Span::styled(
+                            format!("{} children", children.len()),
+                            Style::default().fg(COMMENT),
+                        )));
+                    }
+                    ConfigNode::Phantom => {
+                        content.push(Line::from(Span::styled("!", Style::default().fg(YELLOW))));
+                    }
+                }
+            }
+        }
+        DiffTag::Unchanged => {
+            // Same as normal detail
+            content.push(Line::from(Span::styled(
+                "Value",
+                Style::default().fg(FG).add_modifier(Modifier::BOLD),
+            )));
+            content.push(Line::from(Span::styled(divider, Style::default().fg(COMMENT))));
+            match node {
+                ConfigNode::Leaf(val) => {
+                    let color = value_color(val);
+                    for line in format_value_full(val) {
+                        content.push(Line::from(Span::styled(line, Style::default().fg(color))));
+                    }
+                }
+                ConfigNode::Branch(children) => {
+                    content.push(Line::from(Span::styled(
+                        format!("{} children", children.len()),
+                        Style::default().fg(COMMENT),
+                    )));
+                }
+                ConfigNode::Phantom => {
+                    content.push(Line::from(Span::styled(
+                        "! (not serializable or value not used)",
+                        Style::default().fg(YELLOW),
+                    )));
+                }
+            }
+        }
+    }
+
+    let total = content.len();
+    let start = scroll.min(total);
+    let end = total.min(start + visible_height);
+    let mut result: Vec<Line<'a>> = content.into_iter().skip(start).take(end - start).collect();
+    while result.len() < visible_height {
+        result.push(Line::from(""));
+    }
+    result
+}
+
 pub(super) fn render_dep_list<'a>(
     items: &[String],
     cursor: Option<usize>,
@@ -295,6 +518,7 @@ pub(super) fn render_dep_list<'a>(
     visible_height: usize,
     inner_width: u16,
     root_children: &[(String, ConfigNode)],
+    diff_dep_tags: Option<&[DiffTag]>,
 ) -> Vec<Line<'a>> {
     let width = inner_width as usize;
     if items.is_empty() {
@@ -316,7 +540,24 @@ pub(super) fn render_dep_list<'a>(
     for i in scroll..end {
         let dep = &items[i];
         let is_selected = cursor == Some(i);
-        let bg = if is_selected { CURSOR_BG } else { Color::Reset };
+
+        // Determine diff background for deps
+        let diff_bg = diff_dep_tags
+            .and_then(|tags| tags.get(i))
+            .and_then(|tag| match tag {
+                DiffTag::Removed => Some(DIFF_DELETE_BG),
+                DiffTag::Added => Some(DIFF_INSERT_BG),
+                DiffTag::Modified => Some(DIFF_MODIFIED_BG),
+                _ => None,
+            });
+
+        let bg = if is_selected {
+            CURSOR_BG
+        } else if let Some(dbg) = diff_bg {
+            dbg
+        } else {
+            Color::Reset
+        };
 
         let path_parts: Vec<String> = dep.split('.').map(|s| s.to_string()).collect();
         let node = lookup_node(root_children, &path_parts);
@@ -403,6 +644,26 @@ pub(super) fn render_dep_list<'a>(
     lines
 }
 
+/// Compute per-dep diff tags by comparing old and new dep lists.
+pub(super) fn compute_dep_diff_tags(
+    items: &[String],
+    old_items: Option<&Vec<String>>,
+    new_items: Option<&Vec<String>>,
+) -> Vec<DiffTag> {
+    items
+        .iter()
+        .map(|dep| {
+            let in_old = old_items.map(|o| o.contains(dep)).unwrap_or(false);
+            let in_new = new_items.map(|n| n.contains(dep)).unwrap_or(false);
+            match (in_old, in_new) {
+                (true, false) => DiffTag::Removed,
+                (false, true) => DiffTag::Added,
+                _ => DiffTag::Unchanged,
+            }
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Non-TTY text output
 // ---------------------------------------------------------------------------
@@ -464,4 +725,11 @@ pub(super) const HELP_LINES: &[(&str, &str)] = &[
     ("General", ""),
     ("?", "Toggle this help"),
     ("q / Ctrl-C", "Quit"),
+];
+
+pub(super) const DIFF_HELP_LINES: &[(&str, &str)] = &[
+    ("", ""),
+    ("Tree Diff", ""),
+    ("u", "Toggle show/hide unchanged"),
+    ("Enter on modified leaf", "Side-by-side diff pager"),
 ];

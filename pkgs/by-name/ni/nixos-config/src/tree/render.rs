@@ -1,9 +1,10 @@
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+use crate::diff;
 use crate::theme::*;
 use super::types::*;
 use super::icons::*;
@@ -19,6 +20,7 @@ pub(super) fn render_frame(
     config: &str,
     status_msg: &Option<String>,
     pane_areas: &mut PaneAreas,
+    diff_ctx: Option<&DiffContext>,
 ) {
     let middle_children = get_children_at_path(root_children, &state.path);
     let middle_count = middle_children.map(|c| c.len()).unwrap_or(0);
@@ -83,6 +85,144 @@ pub(super) fn render_frame(
                 Paragraph::new(Line::from(footer_spans))
                     .style(Style::default().bg(HEADER_BG)),
                 outer[1],
+            );
+        }
+
+        // =============================================================
+        // DiffPager layout (side-by-side diff viewer)
+        // =============================================================
+        Mode::DiffPager {
+            path,
+            diff_lines,
+            collapsed_view,
+            hunks: _,
+            scroll: p_scroll,
+            collapsed,
+        } => {
+            let total = if *collapsed { collapsed_view.len() } else { diff_lines.len() };
+
+            let outer = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1), // header
+                    Constraint::Min(1),    // content
+                    Constraint::Length(1), // footer
+                ])
+                .split(size);
+
+            // Header
+            let title = path.join(".");
+            let header_area = outer[0];
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        format!(" {} ", title),
+                        Style::default().fg(BLUE).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        " [DIFF]",
+                        Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
+                    ),
+                ]))
+                .style(Style::default().bg(HEADER_BG)),
+                header_area,
+            );
+
+            // Content: side-by-side
+            let content_area = outer[1];
+            let half_width = content_area.width / 2;
+            let left_area = Rect {
+                x: content_area.x,
+                y: content_area.y,
+                width: half_width,
+                height: content_area.height,
+            };
+            let right_area = Rect {
+                x: content_area.x + half_width,
+                y: content_area.y,
+                width: content_area.width - half_width,
+                height: content_area.height,
+            };
+
+            let visible = content_area.height as usize;
+            let sc = (*p_scroll).min(total.saturating_sub(1));
+            let end = total.min(sc + visible);
+
+            let mut left_lines = Vec::new();
+            let mut right_lines = Vec::new();
+
+            let render_diff_line = |dl: &diff::DiffLine, left_lines: &mut Vec<Line>, right_lines: &mut Vec<Line>| {
+                let (left_style, right_style) = match (&dl.left, &dl.right) {
+                    (Some(l), Some(r)) if l != r => (
+                        Style::default().bg(DIFF_DELETE_BG),
+                        Style::default().bg(DIFF_INSERT_BG),
+                    ),
+                    (Some(_), None) => (
+                        Style::default().bg(DIFF_DELETE_BG),
+                        Style::default(),
+                    ),
+                    (None, Some(_)) => (
+                        Style::default(),
+                        Style::default().bg(DIFF_INSERT_BG),
+                    ),
+                    _ => (Style::default(), Style::default()),
+                };
+
+                left_lines.push(Line::from(Span::styled(
+                    dl.left.as_deref().unwrap_or("").to_string(),
+                    left_style,
+                )));
+                right_lines.push(Line::from(Span::styled(
+                    dl.right.as_deref().unwrap_or("").to_string(),
+                    right_style,
+                )));
+            };
+
+            if *collapsed {
+                for disp in &collapsed_view[sc..end] {
+                    match disp {
+                        diff::DisplayLine::Real(idx) => {
+                            render_diff_line(&diff_lines[*idx], &mut left_lines, &mut right_lines);
+                        }
+                        diff::DisplayLine::Separator(count) => {
+                            let sep_style = Style::default()
+                                .fg(COMMENT)
+                                .add_modifier(Modifier::DIM);
+                            let text = format!("--- {} lines hidden ---", count);
+                            left_lines.push(Line::from(Span::styled(text.clone(), sep_style)));
+                            right_lines.push(Line::from(Span::styled(text, sep_style)));
+                        }
+                    }
+                }
+            } else {
+                for dl in &diff_lines[sc..end] {
+                    render_diff_line(dl, &mut left_lines, &mut right_lines);
+                }
+            }
+
+            let left_block = Block::default().borders(Borders::RIGHT);
+            let left_para = Paragraph::new(left_lines).block(left_block);
+            let right_para = Paragraph::new(right_lines);
+
+            frame.render_widget(left_para, left_area);
+            frame.render_widget(right_para, right_area);
+
+            // Footer
+            let collapse_label = if *collapsed { "expand" } else { "collapse" };
+            let mut footer_spans: Vec<Span> = vec![Span::raw(" ")];
+            footer_spans.extend(footer_pill("j/k", "scroll"));
+            footer_spans.extend(footer_pill("n/N", "hunk"));
+            footer_spans.extend(footer_pill("g/G", "top/bot"));
+            footer_spans.extend(footer_pill("e", collapse_label));
+            footer_spans.extend(footer_pill("q", "back"));
+            footer_spans.push(Span::styled(
+                format!("[{}-{}/{}]", sc + 1, end, total),
+                Style::default().fg(COMMENT),
+            ));
+            frame.render_widget(
+                Paragraph::new(Line::from(footer_spans))
+                    .style(Style::default().bg(HEADER_BG)),
+                outer[2],
             );
         }
 
@@ -155,6 +295,7 @@ pub(super) fn render_frame(
                     i == cu,
                     results_width,
                     node,
+                    diff_ctx,
                 ));
             }
             while result_lines.len() < results_height {
@@ -211,9 +352,11 @@ pub(super) fn render_frame(
             let detail_height = detail_inner.height as usize;
             let detail_width = detail_inner.width;
             let detail_lines = if let Some((rp, node)) = selected_info {
-                render_detail_info(
-                    rp, node, *s_detail_scroll, detail_width, detail_height,
-                )
+                if let Some(ctx) = diff_ctx {
+                    render_diff_detail_info(rp, node, ctx, *s_detail_scroll, detail_width, detail_height)
+                } else {
+                    render_detail_info(rp, node, *s_detail_scroll, detail_width, detail_height)
+                }
             } else {
                 vec![Line::from(""); detail_height]
             };
@@ -232,8 +375,18 @@ pub(super) fn render_frame(
             } else {
                 (None, 0)
             };
-            let deps_lines =
-                render_dep_list(&dep_items, deps_cursor_val, deps_scroll_val, deps_height, deps_inner.width, root_children);
+            let dep_diff_tags = diff_ctx.map(|ctx| {
+                compute_dep_diff_tags(
+                    &dep_items,
+                    ctx.old_deps.dependencies.get(&path_str),
+                    ctx.new_deps.dependencies.get(&path_str),
+                )
+            });
+            let deps_lines = render_dep_list(
+                &dep_items, deps_cursor_val, deps_scroll_val, deps_height,
+                deps_inner.width, root_children,
+                dep_diff_tags.as_deref(),
+            );
             frame.render_widget(deps_block, right_stack[1]);
             frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
@@ -249,8 +402,18 @@ pub(super) fn render_frame(
             } else {
                 (None, 0)
             };
-            let rev_lines =
-                render_dep_list(&rev_items, revs_cursor_val, revs_scroll_val, rev_height, rev_inner.width, root_children);
+            let rev_diff_tags = diff_ctx.map(|ctx| {
+                compute_dep_diff_tags(
+                    &rev_items,
+                    ctx.old_deps.dependents.get(&path_str),
+                    ctx.new_deps.dependents.get(&path_str),
+                )
+            });
+            let rev_lines = render_dep_list(
+                &rev_items, revs_cursor_val, revs_scroll_val, rev_height,
+                rev_inner.width, root_children,
+                rev_diff_tags.as_deref(),
+            );
             frame.render_widget(rev_block, right_stack[2]);
             frame.render_widget(Paragraph::new(rev_lines), rev_inner);
 
@@ -407,6 +570,7 @@ pub(super) fn render_frame(
                     let left_scroll = highlight_idx
                         .map(|idx| idx.saturating_sub(left_height / 2))
                         .unwrap_or(0);
+                    let parent_prefix: Vec<String> = parent_path.to_vec();
                     render_pane_list(
                         parent_children,
                         highlight,
@@ -414,6 +578,8 @@ pub(super) fn render_frame(
                         left_scroll,
                         left_height,
                         left_width,
+                        diff_ctx,
+                        &parent_prefix,
                     )
                 } else {
                     vec![Line::from(""); left_height]
@@ -444,6 +610,8 @@ pub(super) fn render_frame(
                     state.scroll,
                     middle_height,
                     middle_width,
+                    diff_ctx,
+                    &state.path.clone(),
                 )
             } else {
                 vec![Line::from(""); middle_height]
@@ -461,7 +629,9 @@ pub(super) fn render_frame(
             let children_width = children_inner.width;
 
             let children_lines =
-                if let Some((_name, ConfigNode::Branch(ch))) = selected {
+                if let Some((name, ConfigNode::Branch(ch))) = selected {
+                    let mut child_prefix = state.path.clone();
+                    child_prefix.push(name.to_string());
                     render_pane_list(
                         ch,
                         None,
@@ -469,6 +639,8 @@ pub(super) fn render_frame(
                         0,
                         children_height,
                         children_width,
+                        diff_ctx,
+                        &child_prefix,
                     )
                 } else {
                     vec![Line::from(""); children_height]
@@ -504,6 +676,22 @@ pub(super) fn render_frame(
             let deps_active = state.focus == Focus::Deps;
             let revs_active = state.focus == Focus::Revs;
 
+            // Compute diff tags for deps/revs
+            let dep_diff_tags = diff_ctx.map(|ctx| {
+                compute_dep_diff_tags(
+                    &dep_items,
+                    ctx.old_deps.dependencies.get(&path_str),
+                    ctx.new_deps.dependencies.get(&path_str),
+                )
+            });
+            let rev_diff_tags = diff_ctx.map(|ctx| {
+                compute_dep_diff_tags(
+                    &rev_items,
+                    ctx.old_deps.dependents.get(&path_str),
+                    ctx.new_deps.dependents.get(&path_str),
+                )
+            });
+
             let narrow = screen_width < 110;
 
             if narrow {
@@ -521,13 +709,11 @@ pub(super) fn render_frame(
                 let detail_height = detail_inner.height as usize;
                 let detail_width = detail_inner.width;
                 let detail_lines = if let Some((_, node)) = selected {
-                    render_detail_info(
-                        &full_path,
-                        node,
-                        state.detail_scroll,
-                        detail_width,
-                        detail_height,
-                    )
+                    if let Some(ctx) = diff_ctx {
+                        render_diff_detail_info(&full_path, node, ctx, state.detail_scroll, detail_width, detail_height)
+                    } else {
+                        render_detail_info(&full_path, node, state.detail_scroll, detail_width, detail_height)
+                    }
                 } else {
                     vec![Line::from(""); detail_height]
                 };
@@ -552,8 +738,11 @@ pub(super) fn render_frame(
                 } else {
                     None
                 };
-                let deps_lines =
-                    render_dep_list(&dep_items, deps_cursor_val, state.deps_scroll, deps_height, deps_inner.width, root_children);
+                let deps_lines = render_dep_list(
+                    &dep_items, deps_cursor_val, state.deps_scroll, deps_height,
+                    deps_inner.width, root_children,
+                    dep_diff_tags.as_deref(),
+                );
                 frame.render_widget(deps_block, right_stack[0]);
                 frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
@@ -567,8 +756,11 @@ pub(super) fn render_frame(
                 } else {
                     None
                 };
-                let rev_lines =
-                    render_dep_list(&rev_items, revs_cursor_val, state.deps_scroll, rev_height, rev_inner.width, root_children);
+                let rev_lines = render_dep_list(
+                    &rev_items, revs_cursor_val, state.deps_scroll, rev_height,
+                    rev_inner.width, root_children,
+                    rev_diff_tags.as_deref(),
+                );
                 frame.render_widget(rev_block, right_stack[1]);
                 frame.render_widget(Paragraph::new(rev_lines), rev_inner);
 
@@ -594,13 +786,11 @@ pub(super) fn render_frame(
                 let detail_height = detail_inner.height as usize;
                 let detail_width = detail_inner.width;
                 let detail_lines = if let Some((_, node)) = selected {
-                    render_detail_info(
-                        &full_path,
-                        node,
-                        state.detail_scroll,
-                        detail_width,
-                        detail_height,
-                    )
+                    if let Some(ctx) = diff_ctx {
+                        render_diff_detail_info(&full_path, node, ctx, state.detail_scroll, detail_width, detail_height)
+                    } else {
+                        render_detail_info(&full_path, node, state.detail_scroll, detail_width, detail_height)
+                    }
                 } else {
                     vec![Line::from(""); detail_height]
                 };
@@ -617,8 +807,11 @@ pub(super) fn render_frame(
                 } else {
                     None
                 };
-                let deps_lines =
-                    render_dep_list(&dep_items, deps_cursor_val, state.deps_scroll, deps_height, deps_inner.width, root_children);
+                let deps_lines = render_dep_list(
+                    &dep_items, deps_cursor_val, state.deps_scroll, deps_height,
+                    deps_inner.width, root_children,
+                    dep_diff_tags.as_deref(),
+                );
                 frame.render_widget(deps_block, bottom[1]);
                 frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
@@ -632,8 +825,11 @@ pub(super) fn render_frame(
                 } else {
                     None
                 };
-                let rev_lines =
-                    render_dep_list(&rev_items, revs_cursor_val, state.deps_scroll, rev_height, rev_inner.width, root_children);
+                let rev_lines = render_dep_list(
+                    &rev_items, revs_cursor_val, state.deps_scroll, rev_height,
+                    rev_inner.width, root_children,
+                    rev_diff_tags.as_deref(),
+                );
                 frame.render_widget(rev_block, bottom[2]);
                 frame.render_widget(Paragraph::new(rev_lines), rev_inner);
 
@@ -660,6 +856,9 @@ pub(super) fn render_frame(
                 spans.extend(footer_pill("\u{2191}\u{2193}", "move"));
                 spans.extend(footer_pill("\u{2190}\u{2192}", "in/out"));
                 spans.extend(footer_pill("/", "search"));
+                if diff_ctx.is_some() {
+                    spans.extend(footer_pill("u", "unchanged"));
+                }
                 spans.extend(footer_pill("?", "help"));
                 spans.extend(footer_pill("q", "quit"));
                 spans.push(Span::styled(pos, Style::default().fg(COMMENT)));
@@ -689,8 +888,14 @@ pub(super) fn render_frame(
                 let help_inner = help_block.inner(help_area);
                 frame.render_widget(help_block, help_area);
 
+                let all_lines: Vec<(&str, &str)> = if diff_ctx.is_some() {
+                    HELP_LINES.iter().chain(DIFF_HELP_LINES.iter()).copied().collect()
+                } else {
+                    HELP_LINES.to_vec()
+                };
+
                 let mut help_lines: Vec<Line> = Vec::new();
-                for (key, desc) in HELP_LINES {
+                for (key, desc) in &all_lines {
                     if key.is_empty() && desc.is_empty() {
                         help_lines.push(Line::from(""));
                     } else if desc.is_empty() {

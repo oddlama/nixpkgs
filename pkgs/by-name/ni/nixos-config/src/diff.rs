@@ -81,14 +81,14 @@ fn run_pipe(old_nix: &str, new_nix: &str) -> Result<()> {
 }
 
 /// A paired line for side-by-side display.
-struct DiffLine {
-    left: Option<String>,
-    right: Option<String>,
-    tag: ChangeTag,
+pub struct DiffLine {
+    pub left: Option<String>,
+    pub right: Option<String>,
+    pub tag: ChangeTag,
 }
 
 /// Build paired lines for side-by-side display.
-fn build_diff_lines(old_nix: &str, new_nix: &str) -> Vec<DiffLine> {
+pub fn build_diff_lines(old_nix: &str, new_nix: &str) -> Vec<DiffLine> {
     let diff = TextDiff::from_lines(old_nix, new_nix);
     let mut lines = Vec::new();
     let mut removes: Vec<String> = Vec::new();
@@ -133,7 +133,7 @@ fn build_diff_lines(old_nix: &str, new_nix: &str) -> Vec<DiffLine> {
 }
 
 /// Find hunk start positions (lines where changes begin after equal lines).
-fn find_hunks(lines: &[DiffLine]) -> Vec<usize> {
+pub fn find_hunks(lines: &[DiffLine]) -> Vec<usize> {
     let mut hunks = Vec::new();
     let mut in_change = false;
     for (i, line) in lines.iter().enumerate() {
@@ -151,10 +151,10 @@ fn find_hunks(lines: &[DiffLine]) -> Vec<usize> {
     hunks
 }
 
-const CONTEXT_LINES: usize = 3;
+pub const CONTEXT_LINES: usize = 3;
 
 /// A display line in collapsed or full view.
-enum DisplayLine {
+pub enum DisplayLine {
     /// A real diff line, with its index into the original diff_lines vec.
     Real(usize),
     /// A separator representing hidden equal lines; stores the count hidden.
@@ -162,7 +162,7 @@ enum DisplayLine {
 }
 
 /// Build a collapsed view showing only change regions + context lines around them.
-fn build_collapsed_view(diff_lines: &[DiffLine]) -> Vec<DisplayLine> {
+pub fn build_collapsed_view(diff_lines: &[DiffLine]) -> Vec<DisplayLine> {
     let total = diff_lines.len();
     if total == 0 {
         return Vec::new();

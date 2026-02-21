@@ -1,6 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers, MouseEventKind, MouseButton};
 
+use crate::diff;
 use crate::theme::*;
 use crate::tui;
 use super::types::*;
@@ -10,6 +11,7 @@ use super::data::*;
 pub(super) enum InputAction {
     Continue,
     Quit,
+    ToggleUnchanged,
 }
 
 pub(super) fn handle_input(
@@ -22,6 +24,7 @@ pub(super) fn handle_input(
     pane_areas: &PaneAreas,
     terminal_height: u16,
     middle_count: usize,
+    diff_ctx: Option<&DiffContext>,
 ) -> Result<InputAction> {
     // Handle mouse events
     if let tui::InputEvent::Mouse(mouse) = input {
@@ -221,7 +224,7 @@ pub(super) fn handle_input(
                             }
                         }
                     }
-                    Mode::Pager { .. } => {}
+                    Mode::Pager { .. } | Mode::DiffPager { .. } => {}
                 }
                 return Ok(InputAction::Continue);
             }
@@ -273,6 +276,12 @@ pub(super) fn handle_input(
                             *p_scroll += 1;
                         }
                     }
+                    Mode::DiffPager { scroll: p_scroll, diff_lines, collapsed_view, collapsed, .. } => {
+                        let total = if *collapsed { collapsed_view.len() } else { diff_lines.len() };
+                        if *p_scroll + 1 < total {
+                            *p_scroll += 1;
+                        }
+                    }
                 }
                 return Ok(InputAction::Continue);
             }
@@ -304,6 +313,9 @@ pub(super) fn handle_input(
                         }
                     }
                     Mode::Pager { scroll: p_scroll, .. } => {
+                        *p_scroll = p_scroll.saturating_sub(1);
+                    }
+                    Mode::DiffPager { scroll: p_scroll, .. } => {
                         *p_scroll = p_scroll.saturating_sub(1);
                     }
                 }
@@ -369,6 +381,103 @@ pub(super) fn handle_input(
                 *mode = Mode::Normal;
             }
             _ => {}
+        },
+
+        Mode::DiffPager {
+            diff_lines,
+            collapsed_view,
+            hunks,
+            scroll: p_scroll,
+            collapsed,
+            ..
+        } => {
+            let total = if *collapsed { collapsed_view.len() } else { diff_lines.len() };
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if *p_scroll + 1 < total {
+                        *p_scroll += 1;
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    *p_scroll = p_scroll.saturating_sub(1);
+                }
+                KeyCode::Char('g') | KeyCode::Home => {
+                    *p_scroll = 0;
+                }
+                KeyCode::Char('G') | KeyCode::End => {
+                    *p_scroll = total.saturating_sub(1);
+                }
+                KeyCode::PageDown => {
+                    let page = terminal_height.saturating_sub(4) as usize;
+                    *p_scroll = (*p_scroll + page).min(total.saturating_sub(1));
+                }
+                KeyCode::PageUp => {
+                    let page = terminal_height.saturating_sub(4) as usize;
+                    *p_scroll = p_scroll.saturating_sub(page);
+                }
+                KeyCode::Char('e') => {
+                    *collapsed = !*collapsed;
+                    *p_scroll = if *collapsed {
+                        collapsed_view
+                            .iter()
+                            .position(|d| matches!(d, diff::DisplayLine::Real(idx) if *idx >= *p_scroll))
+                            .unwrap_or(0)
+                    } else {
+                        match collapsed_view.get(*p_scroll) {
+                            Some(diff::DisplayLine::Real(idx)) => *idx,
+                            _ => 0,
+                        }
+                    };
+                }
+                KeyCode::Char('n') => {
+                    if *collapsed {
+                        if let Some(pos) = collapsed_view[p_scroll.saturating_add(1)..]
+                            .iter()
+                            .position(|d| {
+                                matches!(d, diff::DisplayLine::Real(idx) if {
+                                    let dl = &diff_lines[*idx];
+                                    dl.left.as_deref() != dl.right.as_deref()
+                                })
+                            })
+                        {
+                            *p_scroll = *p_scroll + 1 + pos;
+                        }
+                    } else {
+                        if let Some(&h) = hunks.iter().find(|&&h| h > *p_scroll) {
+                            *p_scroll = h;
+                        }
+                    }
+                }
+                KeyCode::Char('N') => {
+                    if *collapsed {
+                        if *p_scroll > 0 {
+                            if let Some(pos) = collapsed_view[..*p_scroll]
+                                .iter()
+                                .rposition(|d| {
+                                    matches!(d, diff::DisplayLine::Real(idx) if {
+                                        let dl = &diff_lines[*idx];
+                                        dl.left.as_deref() != dl.right.as_deref()
+                                    })
+                                })
+                            {
+                                *p_scroll = pos;
+                            }
+                        }
+                    } else {
+                        if let Some(&h) = hunks.iter().rev().find(|&&h| h < *p_scroll) {
+                            *p_scroll = h;
+                        }
+                    }
+                }
+                KeyCode::Esc
+                | KeyCode::Char('q')
+                | KeyCode::Char('h')
+                | KeyCode::Left
+                | KeyCode::Backspace => {
+                    *mode = Mode::Normal;
+                }
+                _ => {}
+            }
         },
 
         Mode::Normal => {
@@ -448,14 +557,41 @@ pub(super) fn handle_input(
                                     ConfigNode::Leaf(val) => {
                                         let mut full = state.path.clone();
                                         full.push(name.clone());
-                                        let lines = format_value_full(val);
-                                        let color = value_color(val);
-                                        *mode = Mode::Pager {
-                                            path: full,
-                                            lines,
-                                            scroll: 0,
-                                            color,
-                                        };
+                                        let dot_path = full.join(".");
+                                        let tag = diff_ctx
+                                            .and_then(|ctx| ctx.tags.get(&dot_path).copied())
+                                            .unwrap_or(DiffTag::Unchanged);
+
+                                        if tag == DiffTag::Modified {
+                                            if let Some(ctx) = diff_ctx {
+                                                let old_text = ctx.old_values.get(&dot_path)
+                                                    .map(|v| format_value_full(v).join("\n"))
+                                                    .unwrap_or_default();
+                                                let new_text = ctx.new_values.get(&dot_path)
+                                                    .map(|v| format_value_full(v).join("\n"))
+                                                    .unwrap_or_default();
+                                                let dl = diff::build_diff_lines(&old_text, &new_text);
+                                                let cv = diff::build_collapsed_view(&dl);
+                                                let hunks = diff::find_hunks(&dl);
+                                                *mode = Mode::DiffPager {
+                                                    path: full,
+                                                    diff_lines: dl,
+                                                    collapsed_view: cv,
+                                                    hunks,
+                                                    scroll: 0,
+                                                    collapsed: true,
+                                                };
+                                            }
+                                        } else {
+                                            let lines = format_value_full(val);
+                                            let color = value_color(val);
+                                            *mode = Mode::Pager {
+                                                path: full,
+                                                lines,
+                                                scroll: 0,
+                                                color,
+                                            };
+                                        }
                                     }
                                     ConfigNode::Phantom => {
                                         let mut full = state.path.clone();
@@ -520,6 +656,9 @@ pub(super) fn handle_input(
                             deps_cursor: 0,
                             deps_scroll: 0,
                         };
+                    }
+                    KeyCode::Char('u') if diff_ctx.is_some() => {
+                        return Ok(InputAction::ToggleUnchanged);
                     }
                     KeyCode::Char('?') => {
                         *mode = Mode::Help;

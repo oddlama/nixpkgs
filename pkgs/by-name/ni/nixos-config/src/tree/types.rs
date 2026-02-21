@@ -4,11 +4,25 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use serde_json::Value;
 
+use crate::diff;
+
 pub(super) enum ConfigNode {
     Branch(Vec<(String, ConfigNode)>),
     Leaf(Value),
     /// A node that appears in the dependency graph but has no serializable value.
     Phantom,
+}
+
+impl ConfigNode {
+    pub(super) fn clone_node(&self) -> ConfigNode {
+        match self {
+            ConfigNode::Branch(children) => {
+                ConfigNode::Branch(children.iter().map(|(n, c)| (n.clone(), c.clone_node())).collect())
+            }
+            ConfigNode::Leaf(val) => ConfigNode::Leaf(val.clone()),
+            ConfigNode::Phantom => ConfigNode::Phantom,
+        }
+    }
 }
 
 pub(super) struct DepsIndex {
@@ -54,6 +68,31 @@ pub(super) enum Mode {
         scroll: usize,
         color: Color,
     },
+    DiffPager {
+        path: Vec<String>,
+        diff_lines: Vec<diff::DiffLine>,
+        collapsed_view: Vec<diff::DisplayLine>,
+        hunks: Vec<usize>,
+        scroll: usize,
+        collapsed: bool,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum DiffTag {
+    Removed,
+    Added,
+    Modified,
+    Unchanged,
+}
+
+pub(super) struct DiffContext {
+    pub tags: HashMap<String, DiffTag>,
+    pub old_values: HashMap<String, Value>,
+    pub new_values: HashMap<String, Value>,
+    pub old_deps: DepsIndex,
+    pub new_deps: DepsIndex,
+    pub hide_unchanged: bool,
 }
 
 pub(super) fn rect_contains(r: Rect, col: u16, row: u16) -> bool {

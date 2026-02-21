@@ -45,6 +45,7 @@ pub const DESC_FG: Color = Color::Rgb(0x21, 0x25, 0x2b);
 // Diff-specific colors
 pub const DIFF_DELETE_BG: Color = Color::Rgb(80, 0, 0);
 pub const DIFF_INSERT_BG: Color = Color::Rgb(0, 60, 0);
+pub const DIFF_MODIFIED_BG: Color = Color::Rgb(0, 30, 80);
 
 // ---------------------------------------------------------------------------
 // Widget helpers
