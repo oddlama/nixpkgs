@@ -332,6 +332,20 @@ pub(super) fn jump_to_path(state: &mut MillerState, target_path: &[String], root
     state.focus = Focus::Middle;
 }
 
+/// Check if a full path (parent segments + leaf name) exists in the tree.
+pub(super) fn path_exists_in_tree(root: &[(String, ConfigNode)], target: &[String]) -> bool {
+    if target.is_empty() {
+        return false;
+    }
+    let parent = &target[..target.len() - 1];
+    let leaf = &target[target.len() - 1];
+    if let Some(children) = get_children_at_path(root, parent) {
+        children.iter().any(|(n, _)| n == leaf)
+    } else {
+        false
+    }
+}
+
 pub(super) fn clamp_cursor(cursor: &mut usize, scroll: &mut usize, total: usize, visible: usize) {
     if total == 0 {
         *cursor = 0;

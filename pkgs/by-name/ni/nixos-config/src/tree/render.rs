@@ -344,20 +344,19 @@ pub(super) fn render_frame(
             let s_deps_active = *right_focus == Focus::Deps;
             let s_revs_active = *right_focus == Focus::Revs;
 
-            // Compute diff tags and filter in diff modes
-            let s_should_filter = diff_ctx.map(|ctx| ctx.filter != DiffFilter::All).unwrap_or(false);
+            // Compute diff tags, sorting changed first in diff modes
+            let s_should_sort = diff_ctx.map(|ctx| ctx.filter != DiffFilter::All).unwrap_or(false);
             let (dep_items, dep_diff_tags) = if let Some(ctx) = diff_ctx {
                 let tags = compute_dep_diff_tags(
                     &all_dep_items,
                     ctx.old_deps.dependencies.get(&path_str),
                     ctx.new_deps.dependencies.get(&path_str),
                 );
-                if s_should_filter {
-                    let (fi, ft): (Vec<_>, Vec<_>) = all_dep_items.into_iter()
-                        .zip(tags.into_iter())
-                        .filter(|(_, t)| *t != DiffTag::Unchanged)
-                        .unzip();
-                    (fi, Some(ft))
+                if s_should_sort {
+                    let mut pairs: Vec<_> = all_dep_items.into_iter().zip(tags.into_iter()).collect();
+                    pairs.sort_by_key(|(_, t)| if *t == DiffTag::Unchanged { 1 } else { 0 });
+                    let (si, st): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+                    (si, Some(st))
                 } else {
                     (all_dep_items, Some(tags))
                 }
@@ -370,12 +369,11 @@ pub(super) fn render_frame(
                     ctx.old_deps.dependents.get(&path_str),
                     ctx.new_deps.dependents.get(&path_str),
                 );
-                if s_should_filter {
-                    let (fi, ft): (Vec<_>, Vec<_>) = all_rev_items.into_iter()
-                        .zip(tags.into_iter())
-                        .filter(|(_, t)| *t != DiffTag::Unchanged)
-                        .unzip();
-                    (fi, Some(ft))
+                if s_should_sort {
+                    let mut pairs: Vec<_> = all_rev_items.into_iter().zip(tags.into_iter()).collect();
+                    pairs.sort_by_key(|(_, t)| if *t == DiffTag::Unchanged { 1 } else { 0 });
+                    let (si, st): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+                    (si, Some(st))
                 } else {
                     (all_rev_items, Some(tags))
                 }
@@ -386,7 +384,7 @@ pub(super) fn render_frame(
             let rev_count = rev_items.len();
 
             // Detail pane
-            let detail_block = make_block_keyed("detail", None, 'd', s_detail_active);
+            let detail_block = make_block_keyed("detail", None, 'e', s_detail_active);
             let detail_inner = detail_block.inner(right_stack[0]);
             let detail_height = detail_inner.height as usize;
             let detail_width = detail_inner.width;
@@ -403,7 +401,7 @@ pub(super) fn render_frame(
             frame.render_widget(Paragraph::new(detail_lines), detail_inner);
 
             // Dependencies pane
-            let deps_block = make_block_keyed("dependencies (uses these values)", Some(dep_count), 'p', s_deps_active);
+            let deps_block = make_block_keyed("dependencies (uses these values)", Some(dep_count), 'd', s_deps_active);
             let deps_inner = deps_block.inner(right_stack[1]);
             let deps_height = deps_inner.height as usize;
             let (deps_cursor_val, deps_scroll_val) = if s_deps_active {
@@ -699,20 +697,19 @@ pub(super) fn render_frame(
             let deps_active = state.focus == Focus::Deps;
             let revs_active = state.focus == Focus::Revs;
 
-            // Compute diff tags for deps/revs, filtering in diff modes
-            let should_filter_deps = diff_ctx.map(|ctx| ctx.filter != DiffFilter::All).unwrap_or(false);
+            // Compute diff tags for deps/revs, sorting changed first in diff modes
+            let should_sort_deps = diff_ctx.map(|ctx| ctx.filter != DiffFilter::All).unwrap_or(false);
             let (dep_items, dep_diff_tags) = if let Some(ctx) = diff_ctx {
                 let tags = compute_dep_diff_tags(
                     &all_dep_items,
                     ctx.old_deps.dependencies.get(&path_str),
                     ctx.new_deps.dependencies.get(&path_str),
                 );
-                if should_filter_deps {
-                    let (fi, ft): (Vec<_>, Vec<_>) = all_dep_items.into_iter()
-                        .zip(tags.into_iter())
-                        .filter(|(_, t)| *t != DiffTag::Unchanged)
-                        .unzip();
-                    (fi, Some(ft))
+                if should_sort_deps {
+                    let mut pairs: Vec<_> = all_dep_items.into_iter().zip(tags.into_iter()).collect();
+                    pairs.sort_by_key(|(_, t)| if *t == DiffTag::Unchanged { 1 } else { 0 });
+                    let (si, st): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+                    (si, Some(st))
                 } else {
                     (all_dep_items, Some(tags))
                 }
@@ -725,12 +722,11 @@ pub(super) fn render_frame(
                     ctx.old_deps.dependents.get(&path_str),
                     ctx.new_deps.dependents.get(&path_str),
                 );
-                if should_filter_deps {
-                    let (fi, ft): (Vec<_>, Vec<_>) = all_rev_items.into_iter()
-                        .zip(tags.into_iter())
-                        .filter(|(_, t)| *t != DiffTag::Unchanged)
-                        .unzip();
-                    (fi, Some(ft))
+                if should_sort_deps {
+                    let mut pairs: Vec<_> = all_rev_items.into_iter().zip(tags.into_iter()).collect();
+                    pairs.sort_by_key(|(_, t)| if *t == DiffTag::Unchanged { 1 } else { 0 });
+                    let (si, st): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+                    (si, Some(st))
                 } else {
                     (all_rev_items, Some(tags))
                 }
@@ -752,7 +748,7 @@ pub(super) fn render_frame(
                     .split(outer[2]);
 
                 // Detail
-                let detail_block = make_block_keyed("detail", None, 'd', detail_active);
+                let detail_block = make_block_keyed("detail", None, 'e', detail_active);
                 let detail_inner = detail_block.inner(bottom[0]);
                 let detail_height = detail_inner.height as usize;
                 let detail_width = detail_inner.width;
@@ -777,7 +773,7 @@ pub(super) fn render_frame(
                     .split(bottom[1]);
 
                 // Dependencies
-                let deps_block = make_block_keyed("dependencies (uses these values)", Some(dep_count), 'p', deps_active);
+                let deps_block = make_block_keyed("dependencies (uses these values)", Some(dep_count), 'd', deps_active);
                 let deps_inner = deps_block.inner(right_stack[0]);
                 let deps_height = deps_inner.height as usize;
                 let deps_cursor_val = if deps_active {
@@ -829,7 +825,7 @@ pub(super) fn render_frame(
                     .split(outer[2]);
 
                 // Detail
-                let detail_block = make_block_keyed("detail", None, 'd', detail_active);
+                let detail_block = make_block_keyed("detail", None, 'e', detail_active);
                 let detail_inner = detail_block.inner(bottom[0]);
                 let detail_height = detail_inner.height as usize;
                 let detail_width = detail_inner.width;
@@ -846,7 +842,7 @@ pub(super) fn render_frame(
                 frame.render_widget(Paragraph::new(detail_lines), detail_inner);
 
                 // Dependencies
-                let deps_block = make_block_keyed("dependencies (uses these values)", Some(dep_count), 'p', deps_active);
+                let deps_block = make_block_keyed("dependencies (uses these values)", Some(dep_count), 'd', deps_active);
                 let deps_inner = deps_block.inner(bottom[1]);
                 let deps_height = deps_inner.height as usize;
                 let deps_cursor_val = if deps_active {

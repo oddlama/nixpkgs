@@ -99,6 +99,8 @@ fn run_inner(
     let mut mode = Mode::Normal;
     let mut status_msg: Option<String> = None;
     let mut pane_areas = PaneAreas::default();
+    // Remembered focus path for restoring after filter toggles
+    let mut remembered_focus: Option<Vec<String>> = None;
 
     let mut terminal = tui::setup()?;
 
@@ -151,7 +153,25 @@ fn run_inner(
             InputAction::Continue => {}
             InputAction::ToggleUnchanged => {
                 if let Some(ref mut ctx) = diff_ctx {
+                    // Determine focus target: use remembered path if we
+                    // haven't navigated since last failed restore (still at
+                    // root), otherwise capture current position.
+                    let current_path = current_full_path(&state, active_root);
+                    let target = if state.path.is_empty() && state.cursor == 0 {
+                        remembered_focus.take().unwrap_or(current_path)
+                    } else {
+                        remembered_focus = None;
+                        current_path
+                    };
+
                     ctx.filter = ctx.filter.next();
+
+                    let new_root = match ctx.filter {
+                        DiffFilter::Changed => filtered_root,
+                        DiffFilter::ValueChanged => value_filtered_root,
+                        DiffFilter::All => full_root,
+                    };
+
                     // Reset navigation
                     state.path.clear();
                     state.cursor = 0;
@@ -160,6 +180,16 @@ fn run_inner(
                     state.deps_cursor = 0;
                     state.deps_scroll = 0;
                     state.path_memory.clear();
+
+                    // Try to restore focus
+                    if !target.is_empty() {
+                        if path_exists_in_tree(new_root, &target) {
+                            jump_to_path(&mut state, &target, new_root);
+                            remembered_focus = None;
+                        } else {
+                            remembered_focus = Some(target);
+                        }
+                    }
                 }
             }
         }

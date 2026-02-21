@@ -626,10 +626,10 @@ pub(super) fn handle_input(
                             state.deps_scroll = 0;
                         }
                     }
-                    KeyCode::Char('d') => {
+                    KeyCode::Char('e') => {
                         state.focus = Focus::Detail;
                     }
-                    KeyCode::Char('p') => {
+                    KeyCode::Char('d') => {
                         state.focus = Focus::Deps;
                         state.deps_cursor = 0;
                         state.deps_scroll = 0;
@@ -692,7 +692,7 @@ pub(super) fn handle_input(
                     | KeyCode::Char('b') => {
                         state.focus = Focus::Middle;
                     }
-                    KeyCode::Char('p') | KeyCode::Tab => {
+                    KeyCode::Char('d') | KeyCode::Tab => {
                         state.focus = Focus::Deps;
                         state.deps_cursor = 0;
                         state.deps_scroll = 0;
@@ -758,7 +758,7 @@ pub(super) fn handle_input(
                         | KeyCode::Char('b') => {
                             state.focus = Focus::Middle;
                         }
-                        KeyCode::Char('d') => {
+                        KeyCode::Char('e') => {
                             state.focus = Focus::Detail;
                         }
                         KeyCode::Char('r') | KeyCode::Tab => {
@@ -823,10 +823,10 @@ pub(super) fn handle_input(
                         | KeyCode::Char('b') => {
                             state.focus = Focus::Middle;
                         }
-                        KeyCode::Char('d') => {
+                        KeyCode::Char('e') => {
                             state.focus = Focus::Detail;
                         }
-                        KeyCode::Char('p') => {
+                        KeyCode::Char('d') => {
                             state.focus = Focus::Deps;
                             state.deps_cursor = 0;
                             state.deps_scroll = 0;
@@ -931,7 +931,7 @@ pub(super) fn handle_input(
                     let page = terminal_height.saturating_sub(8) as usize;
                     *s_detail_scroll = s_detail_scroll.saturating_sub(page);
                 }
-                KeyCode::Char('p') => {
+                KeyCode::Char('d') => {
                     *right_focus = Focus::Deps;
                     *s_deps_cursor = 0;
                     *s_deps_scroll = 0;
@@ -988,7 +988,7 @@ pub(super) fn handle_input(
                             *status_msg = Some(msg);
                         }
                     }
-                    KeyCode::Char('d') => {
+                    KeyCode::Char('e') => {
                         *right_focus = Focus::Detail;
                     }
                     KeyCode::Char('r') => {
@@ -1044,10 +1044,10 @@ pub(super) fn handle_input(
                             *status_msg = Some(msg);
                         }
                     }
-                    KeyCode::Char('d') => {
+                    KeyCode::Char('e') => {
                         *right_focus = Focus::Detail;
                     }
-                    KeyCode::Char('p') => {
+                    KeyCode::Char('d') => {
                         *right_focus = Focus::Deps;
                         *s_deps_cursor = 0;
                         *s_deps_scroll = 0;
