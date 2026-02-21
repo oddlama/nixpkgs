@@ -634,7 +634,7 @@ pub(super) fn handle_input(
                         state.deps_cursor = 0;
                         state.deps_scroll = 0;
                     }
-                    KeyCode::Char('n') => {
+                    KeyCode::Char('r') => {
                         state.focus = Focus::Revs;
                         state.deps_cursor = 0;
                         state.deps_scroll = 0;
@@ -697,7 +697,7 @@ pub(super) fn handle_input(
                         state.deps_cursor = 0;
                         state.deps_scroll = 0;
                     }
-                    KeyCode::Char('n') => {
+                    KeyCode::Char('r') => {
                         state.focus = Focus::Revs;
                         state.deps_cursor = 0;
                         state.deps_scroll = 0;
@@ -761,7 +761,7 @@ pub(super) fn handle_input(
                         KeyCode::Char('d') => {
                             state.focus = Focus::Detail;
                         }
-                        KeyCode::Char('n') | KeyCode::Tab => {
+                        KeyCode::Char('r') | KeyCode::Tab => {
                             state.focus = Focus::Revs;
                             state.deps_cursor = 0;
                             state.deps_scroll = 0;
@@ -936,7 +936,7 @@ pub(super) fn handle_input(
                     *s_deps_cursor = 0;
                     *s_deps_scroll = 0;
                 }
-                KeyCode::Char('n') => {
+                KeyCode::Char('r') => {
                     *right_focus = Focus::Revs;
                     *s_deps_cursor = 0;
                     *s_deps_scroll = 0;
@@ -991,7 +991,7 @@ pub(super) fn handle_input(
                     KeyCode::Char('d') => {
                         *right_focus = Focus::Detail;
                     }
-                    KeyCode::Char('n') => {
+                    KeyCode::Char('r') => {
                         *right_focus = Focus::Revs;
                         *s_deps_cursor = 0;
                         *s_deps_scroll = 0;

@@ -276,7 +276,7 @@ pub(super) fn render_frame(
                 .split(outer[1]);
 
             let results_active = *right_focus == Focus::Middle;
-            let results_block = make_block("Results", results_active);
+            let results_block = make_block("results", results_active);
             let results_inner = results_block.inner(body[0]);
             let results_height = results_inner.height as usize;
             let results_width = results_inner.width;
@@ -386,7 +386,7 @@ pub(super) fn render_frame(
             let rev_count = rev_items.len();
 
             // Detail pane
-            let detail_block = make_block_keyed("Detail", None, 'd', s_detail_active);
+            let detail_block = make_block_keyed("detail", None, 'd', s_detail_active);
             let detail_inner = detail_block.inner(right_stack[0]);
             let detail_height = detail_inner.height as usize;
             let detail_width = detail_inner.width;
@@ -403,7 +403,7 @@ pub(super) fn render_frame(
             frame.render_widget(Paragraph::new(detail_lines), detail_inner);
 
             // Dependencies pane
-            let deps_block = make_block_keyed("Dependencies", Some(dep_count), 'p', s_deps_active);
+            let deps_block = make_block_keyed("dependencies (uses these values)", Some(dep_count), 'p', s_deps_active);
             let deps_inner = deps_block.inner(right_stack[1]);
             let deps_height = deps_inner.height as usize;
             let (deps_cursor_val, deps_scroll_val) = if s_deps_active {
@@ -423,7 +423,7 @@ pub(super) fn render_frame(
             frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
             // Dependents pane
-            let rev_block = make_block_keyed("Dependents", Some(rev_count), 'n', s_revs_active);
+            let rev_block = make_block_keyed("reverse deps (used by)", Some(rev_count), 'r', s_revs_active);
             let rev_inner = rev_block.inner(right_stack[2]);
             let rev_height = rev_inner.height as usize;
             let (revs_cursor_val, revs_scroll_val) = if s_revs_active {
@@ -576,7 +576,7 @@ pub(super) fn render_frame(
                 .split(outer[1]);
 
             // Parent
-            let left_block = make_block("Parent", false);
+            let left_block = make_block("parent", false);
             let left_inner = left_block.inner(top[0]);
             let left_height = left_inner.height as usize;
             let left_width = left_inner.width;
@@ -616,7 +616,7 @@ pub(super) fn render_frame(
 
             // Browse
             let middle_active = state.focus == Focus::Middle;
-            let middle_block = make_block_keyed("Browse", None, 'b', middle_active);
+            let middle_block = make_block_keyed("browse", None, 'b', middle_active);
             let middle_inner = middle_block.inner(top[1]);
             let middle_height = middle_inner.height as usize;
             let middle_width = middle_inner.width;
@@ -648,7 +648,7 @@ pub(super) fn render_frame(
             frame.render_widget(Paragraph::new(middle_lines), middle_inner);
 
             // Children
-            let children_block = make_block("Children", false);
+            let children_block = make_block("children", false);
             let children_inner = children_block.inner(top[2]);
             let children_height = children_inner.height as usize;
             let children_width = children_inner.width;
@@ -752,7 +752,7 @@ pub(super) fn render_frame(
                     .split(outer[2]);
 
                 // Detail
-                let detail_block = make_block_keyed("Detail", None, 'd', detail_active);
+                let detail_block = make_block_keyed("detail", None, 'd', detail_active);
                 let detail_inner = detail_block.inner(bottom[0]);
                 let detail_height = detail_inner.height as usize;
                 let detail_width = detail_inner.width;
@@ -777,7 +777,7 @@ pub(super) fn render_frame(
                     .split(bottom[1]);
 
                 // Dependencies
-                let deps_block = make_block_keyed("Dependencies", Some(dep_count), 'p', deps_active);
+                let deps_block = make_block_keyed("dependencies (uses these values)", Some(dep_count), 'p', deps_active);
                 let deps_inner = deps_block.inner(right_stack[0]);
                 let deps_height = deps_inner.height as usize;
                 let deps_cursor_val = if deps_active {
@@ -795,7 +795,7 @@ pub(super) fn render_frame(
                 frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
                 // Dependents
-                let rev_block = make_block_keyed("Dependents", Some(rev_count), 'n', revs_active);
+                let rev_block = make_block_keyed("reverse deps (used by)", Some(rev_count), 'r', revs_active);
                 let rev_inner = rev_block.inner(right_stack[1]);
                 let rev_height = rev_inner.height as usize;
                 let revs_cursor_val = if revs_active {
@@ -822,14 +822,14 @@ pub(super) fn render_frame(
                 let bottom = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([
-                        Constraint::Percentage(50),
                         Constraint::Percentage(25),
+                        Constraint::Min(0),
                         Constraint::Min(0),
                     ])
                     .split(outer[2]);
 
                 // Detail
-                let detail_block = make_block_keyed("Detail", None, 'd', detail_active);
+                let detail_block = make_block_keyed("detail", None, 'd', detail_active);
                 let detail_inner = detail_block.inner(bottom[0]);
                 let detail_height = detail_inner.height as usize;
                 let detail_width = detail_inner.width;
@@ -846,7 +846,7 @@ pub(super) fn render_frame(
                 frame.render_widget(Paragraph::new(detail_lines), detail_inner);
 
                 // Dependencies
-                let deps_block = make_block_keyed("Dependencies", Some(dep_count), 'p', deps_active);
+                let deps_block = make_block_keyed("dependencies (uses these values)", Some(dep_count), 'p', deps_active);
                 let deps_inner = deps_block.inner(bottom[1]);
                 let deps_height = deps_inner.height as usize;
                 let deps_cursor_val = if deps_active {
@@ -864,7 +864,7 @@ pub(super) fn render_frame(
                 frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
                 // Dependents
-                let rev_block = make_block_keyed("Dependents", Some(rev_count), 'n', revs_active);
+                let rev_block = make_block_keyed("reverse deps (used by)", Some(rev_count), 'r', revs_active);
                 let rev_inner = rev_block.inner(bottom[2]);
                 let rev_height = rev_inner.height as usize;
                 let revs_cursor_val = if revs_active {

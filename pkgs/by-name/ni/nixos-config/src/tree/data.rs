@@ -453,7 +453,7 @@ pub(super) fn build_diff_context(
         new_values,
         old_deps,
         new_deps,
-        filter: DiffFilter::Changed,
+        filter: DiffFilter::ValueChanged,
     }
 }
 

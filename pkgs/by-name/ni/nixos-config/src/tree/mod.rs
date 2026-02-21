@@ -43,7 +43,7 @@ pub fn run_diff(
     nix_args: &[String],
 ) -> Result<()> {
     if !use_color {
-        eprintln!("tree-diff requires a terminal with color support");
+        eprintln!("diff requires a terminal with color support");
         return Ok(());
     }
 
@@ -152,7 +152,6 @@ fn run_inner(
             InputAction::ToggleUnchanged => {
                 if let Some(ref mut ctx) = diff_ctx {
                     ctx.filter = ctx.filter.next();
-                    status_msg = Some(format!("Filter: {}", ctx.filter.label()));
                     // Reset navigation
                     state.path.clear();
                     state.cursor = 0;

@@ -24,8 +24,57 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Diff two NixOS configurations
+    /// Browse a NixOS configuration as an interactive tree
+    Show {
+        /// Use tracking-explicit.json (only explicitly defined values)
+        #[arg(long)]
+        explicit: bool,
+
+        /// Color output mode
+        #[arg(long, value_enum, default_value_t = ColorMode::Auto)]
+        color: ColorMode,
+
+        /// Configuration to browse (path or flake ref); defaults to /var/run/current-system
+        #[arg(name = "CONFIG")]
+        config: Option<String>,
+    },
+
+    /// Browse a diff of two NixOS configurations as an interactive tree
     Diff {
+        /// Use tracking-explicit.json (only explicitly defined values)
+        #[arg(long)]
+        explicit: bool,
+
+        /// Color output mode
+        #[arg(long, value_enum, default_value_t = ColorMode::Auto)]
+        color: ColorMode,
+
+        /// Old configuration (path or flake ref); defaults to /var/run/current-system
+        #[arg(name = "OLD")]
+        old: Option<String>,
+
+        /// New configuration (path or flake ref)
+        #[arg(name = "NEW")]
+        new: Option<String>,
+    },
+
+    /// Print a NixOS configuration as text
+    TextShow {
+        /// Use tracking-explicit.json (only explicitly defined values)
+        #[arg(long)]
+        explicit: bool,
+
+        /// Use flat dot-path format (no nested braces)
+        #[arg(long)]
+        flat: bool,
+
+        /// Configuration to show (path or flake ref); defaults to /var/run/current-system
+        #[arg(name = "CONFIG")]
+        config: Option<String>,
+    },
+
+    /// Diff two NixOS configurations as text
+    TextDiff {
         /// Use tracking-explicit.json (only explicitly defined values)
         #[arg(long)]
         explicit: bool,
@@ -41,21 +90,6 @@ enum Commands {
         /// New configuration (path or flake ref)
         #[arg(name = "NEW")]
         new: Option<String>,
-    },
-
-    /// Show a NixOS configuration
-    Show {
-        /// Use tracking-explicit.json (only explicitly defined values)
-        #[arg(long)]
-        explicit: bool,
-
-        /// Use flat dot-path format (no nested braces)
-        #[arg(long)]
-        flat: bool,
-
-        /// Configuration to show (path or flake ref); defaults to /var/run/current-system
-        #[arg(name = "CONFIG")]
-        config: Option<String>,
     },
 
     /// Save a NixOS configuration to a .nix file
@@ -76,40 +110,6 @@ enum Commands {
         #[arg(name = "CONFIG")]
         config: Option<String>,
     },
-
-    /// Browse a NixOS configuration as an interactive tree
-    Tree {
-        /// Use tracking-explicit.json (only explicitly defined values)
-        #[arg(long)]
-        explicit: bool,
-
-        /// Color output mode
-        #[arg(long, value_enum, default_value_t = ColorMode::Auto)]
-        color: ColorMode,
-
-        /// Configuration to browse (path or flake ref); defaults to /var/run/current-system
-        #[arg(name = "CONFIG")]
-        config: Option<String>,
-    },
-
-    /// Browse a diff of two NixOS configurations as an interactive tree
-    TreeDiff {
-        /// Use tracking-explicit.json (only explicitly defined values)
-        #[arg(long)]
-        explicit: bool,
-
-        /// Color output mode
-        #[arg(long, value_enum, default_value_t = ColorMode::Auto)]
-        color: ColorMode,
-
-        /// Old configuration (path or flake ref); defaults to /var/run/current-system
-        #[arg(name = "OLD")]
-        old: Option<String>,
-
-        /// New configuration (path or flake ref)
-        #[arg(name = "NEW")]
-        new: Option<String>,
-    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -126,42 +126,7 @@ fn main() -> Result<()> {
     let nix_args = &cli.nix_args;
 
     match cli.command {
-        Commands::Diff {
-            explicit,
-            exec,
-            old,
-            new,
-        } => {
-            // With two positional args: OLD NEW
-            // With one positional arg: NEW (OLD defaults to current-system)
-            let (old_arg, new_arg) = match (old, new) {
-                (Some(o), Some(n)) => (o, n),
-                (Some(n), None) => (DEFAULT_CONFIG.to_string(), n),
-                (None, None) => {
-                    anyhow::bail!("diff requires at least one argument (NEW config)");
-                }
-                _ => unreachable!(),
-            };
-            diff::run(&old_arg, &new_arg, explicit, exec.as_deref(), nix_args)
-        }
         Commands::Show {
-            explicit,
-            flat,
-            config,
-        } => {
-            let config = config.as_deref().unwrap_or(DEFAULT_CONFIG);
-            show::run(config, explicit, flat, nix_args)
-        }
-        Commands::Save {
-            explicit,
-            flat,
-            output,
-            config,
-        } => {
-            let config = config.as_deref().unwrap_or(DEFAULT_CONFIG);
-            save::run(&output, config, explicit, flat, nix_args)
-        }
-        Commands::Tree {
             explicit,
             color,
             config,
@@ -174,7 +139,7 @@ fn main() -> Result<()> {
             let config = config.as_deref().unwrap_or(DEFAULT_CONFIG);
             tree::run(config, explicit, use_color, nix_args)
         }
-        Commands::TreeDiff {
+        Commands::Diff {
             explicit,
             color,
             old,
@@ -189,11 +154,44 @@ fn main() -> Result<()> {
                 (Some(o), Some(n)) => (o, n),
                 (Some(n), None) => (DEFAULT_CONFIG.to_string(), n),
                 (None, None) => {
-                    anyhow::bail!("tree-diff requires at least one argument (NEW config)");
+                    anyhow::bail!("diff requires at least one argument (NEW config)");
                 }
                 _ => unreachable!(),
             };
             tree::run_diff(&old_arg, &new_arg, explicit, use_color, nix_args)
+        }
+        Commands::TextShow {
+            explicit,
+            flat,
+            config,
+        } => {
+            let config = config.as_deref().unwrap_or(DEFAULT_CONFIG);
+            show::run(config, explicit, flat, nix_args)
+        }
+        Commands::TextDiff {
+            explicit,
+            exec,
+            old,
+            new,
+        } => {
+            let (old_arg, new_arg) = match (old, new) {
+                (Some(o), Some(n)) => (o, n),
+                (Some(n), None) => (DEFAULT_CONFIG.to_string(), n),
+                (None, None) => {
+                    anyhow::bail!("text-diff requires at least one argument (NEW config)");
+                }
+                _ => unreachable!(),
+            };
+            diff::run(&old_arg, &new_arg, explicit, exec.as_deref(), nix_args)
+        }
+        Commands::Save {
+            explicit,
+            flat,
+            output,
+            config,
+        } => {
+            let config = config.as_deref().unwrap_or(DEFAULT_CONFIG);
+            save::run(&output, config, explicit, flat, nix_args)
         }
     }
 }
