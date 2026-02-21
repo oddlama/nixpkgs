@@ -1,12 +1,13 @@
 use anyhow::Result;
 use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::json2nix;
 use crate::resolve;
+use crate::theme;
 use crate::tui;
 
 pub fn run(config: &str, explicit: bool, flat: bool, nix_args: &[String]) -> Result<()> {
@@ -51,12 +52,17 @@ fn run_tui(text: &str, label: &str) -> Result<()> {
             let header = Line::from(vec![
                 Span::styled(
                     format!(" {} ", label),
-                    Style::default().add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme::FG)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(format!("  ({} lines)", total)),
+                Span::styled(
+                    format!("  ({} lines)", total),
+                    Style::default().fg(theme::COMMENT),
+                ),
             ]);
             frame.render_widget(
-                Paragraph::new(header).style(Style::default().bg(Color::DarkGray)),
+                Paragraph::new(header).style(Style::default().bg(theme::HEADER_BG)),
                 chunks[0],
             );
 
@@ -70,12 +76,12 @@ fn run_tui(text: &str, label: &str) -> Result<()> {
                 let line_num = format!("{:>width$} ", i + 1, width = gutter_width);
                 let is_match = search_matches.contains(&i);
                 let content_style = if is_match {
-                    Style::default().bg(Color::Yellow).fg(Color::Black)
+                    Style::default().bg(theme::HIGHLIGHT_BG)
                 } else {
                     Style::default()
                 };
                 lines.push(Line::from(vec![
-                    Span::styled(line_num, Style::default().fg(Color::DarkGray)),
+                    Span::styled(line_num, Style::default().fg(theme::COMMENT)),
                     Span::styled(content_lines[i].to_string(), content_style),
                 ]));
             }
@@ -85,32 +91,30 @@ fn run_tui(text: &str, label: &str) -> Result<()> {
             let footer_line = match &mode {
                 Mode::Normal => {
                     if let Some(msg) = &status_msg {
-                        Line::from(Span::styled(
-                            format!(" {} ", msg),
-                            Style::default().fg(Color::Green),
-                        ))
-                    } else {
                         Line::from(vec![
+                            Span::raw(" "),
                             Span::styled(
-                                " j/k",
-                                Style::default().add_modifier(Modifier::BOLD),
+                                format!(" {} ", msg),
+                                Style::default().fg(theme::DESC_FG).bg(theme::GREEN),
                             ),
-                            Span::raw(":scroll "),
-                            Span::styled("g/G", Style::default().add_modifier(Modifier::BOLD)),
-                            Span::raw(":top/bot "),
-                            Span::styled("/", Style::default().add_modifier(Modifier::BOLD)),
-                            Span::raw(":search "),
-                            Span::styled("s", Style::default().add_modifier(Modifier::BOLD)),
-                            Span::raw(":save "),
-                            Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
-                            Span::raw(":quit"),
-                            Span::raw(format!(
-                                "  [{}-{}/{}]",
+                        ])
+                    } else {
+                        let mut spans: Vec<Span> = vec![Span::raw(" ")];
+                        spans.extend(theme::footer_pill("j/k", "scroll"));
+                        spans.extend(theme::footer_pill("g/G", "top/bot"));
+                        spans.extend(theme::footer_pill("/", "search"));
+                        spans.extend(theme::footer_pill("s", "save"));
+                        spans.extend(theme::footer_pill("q", "quit"));
+                        spans.push(Span::styled(
+                            format!(
+                                "[{}-{}/{}]",
                                 scroll + 1,
                                 end,
                                 total
-                            )),
-                        ])
+                            ),
+                            Style::default().fg(theme::COMMENT),
+                        ));
+                        Line::from(spans)
                     }
                 }
                 Mode::Search => Line::from(vec![
@@ -126,7 +130,7 @@ fn run_tui(text: &str, label: &str) -> Result<()> {
                 ]),
             };
             frame.render_widget(
-                Paragraph::new(footer_line).style(Style::default().bg(Color::DarkGray)),
+                Paragraph::new(footer_line).style(Style::default().bg(theme::HEADER_BG)),
                 chunks[2],
             );
         })?;

@@ -3,6 +3,7 @@ mod json2nix;
 mod resolve;
 mod save;
 mod show;
+mod theme;
 mod tree;
 mod tui;
 

@@ -4,13 +4,14 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use similar::{ChangeTag, TextDiff};
 
 use crate::json2nix;
 use crate::resolve;
+use crate::theme;
 use crate::tui;
 
 pub fn run(
@@ -250,19 +251,19 @@ fn run_tui(old_nix: &str, new_nix: &str, old_label: &str, new_label: &str) -> Re
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     format!(" {} ", old_label),
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::RED).add_modifier(Modifier::BOLD),
                 )))
-                .style(Style::default().bg(Color::DarkGray)),
+                .style(Style::default().bg(theme::HEADER_BG)),
                 header_left,
             );
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     format!(" {} ", new_label),
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(theme::GREEN)
                         .add_modifier(Modifier::BOLD),
                 )))
-                .style(Style::default().bg(Color::DarkGray)),
+                .style(Style::default().bg(theme::HEADER_BG)),
                 header_right,
             );
 
@@ -291,16 +292,16 @@ fn run_tui(old_nix: &str, new_nix: &str, old_label: &str, new_label: &str) -> Re
             let render_diff_line = |dl: &DiffLine, left_lines: &mut Vec<Line>, right_lines: &mut Vec<Line>| {
                 let (left_style, right_style) = match (&dl.left, &dl.right) {
                     (Some(l), Some(r)) if l != r => (
-                        Style::default().bg(Color::Rgb(80, 0, 0)),
-                        Style::default().bg(Color::Rgb(0, 60, 0)),
+                        Style::default().bg(theme::DIFF_DELETE_BG),
+                        Style::default().bg(theme::DIFF_INSERT_BG),
                     ),
                     (Some(_), None) => (
-                        Style::default().bg(Color::Rgb(80, 0, 0)),
+                        Style::default().bg(theme::DIFF_DELETE_BG),
                         Style::default(),
                     ),
                     (None, Some(_)) => (
                         Style::default(),
-                        Style::default().bg(Color::Rgb(0, 60, 0)),
+                        Style::default().bg(theme::DIFF_INSERT_BG),
                     ),
                     _ => (Style::default(), Style::default()),
                 };
@@ -323,7 +324,7 @@ fn run_tui(old_nix: &str, new_nix: &str, old_label: &str, new_label: &str) -> Re
                         }
                         DisplayLine::Separator(count) => {
                             let sep_style = Style::default()
-                                .fg(Color::DarkGray)
+                                .fg(theme::COMMENT)
                                 .add_modifier(Modifier::DIM);
                             let text = format!("--- {} lines hidden ---", count);
                             left_lines.push(Line::from(Span::styled(text.clone(), sep_style)));
@@ -346,29 +347,24 @@ fn run_tui(old_nix: &str, new_nix: &str, old_label: &str, new_label: &str) -> Re
 
             // Footer
             let collapse_label = if collapsed { "expand" } else { "collapse" };
-            let footer = Line::from(vec![
-                Span::styled(
-                    " j/k",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(":scroll "),
-                Span::styled("n/N", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(":hunk "),
-                Span::styled("g/G", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(":top/bot "),
-                Span::styled("e", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format!(":{} ", collapse_label)),
-                Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(":quit"),
-                Span::raw(format!(
-                    "  [{}-{}/{}]",
+            let mut footer_spans: Vec<Span> = vec![Span::raw(" ")];
+            footer_spans.extend(theme::footer_pill("j/k", "scroll"));
+            footer_spans.extend(theme::footer_pill("n/N", "hunk"));
+            footer_spans.extend(theme::footer_pill("g/G", "top/bot"));
+            footer_spans.extend(theme::footer_pill("e", collapse_label));
+            footer_spans.extend(theme::footer_pill("q", "quit"));
+            footer_spans.push(Span::styled(
+                format!(
+                    "[{}-{}/{}]",
                     scroll + 1,
                     end,
                     total
-                )),
-            ]);
+                ),
+                Style::default().fg(theme::COMMENT),
+            ));
             frame.render_widget(
-                Paragraph::new(footer).style(Style::default().bg(Color::DarkGray)),
+                Paragraph::new(Line::from(footer_spans))
+                    .style(Style::default().bg(theme::HEADER_BG)),
                 chunks[2],
             );
         })?;
@@ -403,14 +399,11 @@ fn run_tui(old_nix: &str, new_nix: &str, old_label: &str, new_label: &str) -> Re
             KeyCode::Char('e') => {
                 collapsed = !collapsed;
                 scroll = if collapsed {
-                    // Find the collapsed-view index closest to current scroll position
-                    // by looking for the first Real entry at or after the current scroll
                     collapsed_view
                         .iter()
                         .position(|d| matches!(d, DisplayLine::Real(idx) if *idx >= scroll))
                         .unwrap_or(0)
                 } else {
-                    // Expanding: find the original index of the current collapsed line
                     match collapsed_view.get(scroll) {
                         Some(DisplayLine::Real(idx)) => *idx,
                         _ => 0,
@@ -419,7 +412,6 @@ fn run_tui(old_nix: &str, new_nix: &str, old_label: &str, new_label: &str) -> Re
             }
             KeyCode::Char('n') => {
                 if collapsed {
-                    // In collapsed mode, find next hunk by display index
                     if let Some(pos) = collapsed_view[scroll.saturating_add(1)..]
                         .iter()
                         .position(|d| {
@@ -429,9 +421,7 @@ fn run_tui(old_nix: &str, new_nix: &str, old_label: &str, new_label: &str) -> Re
                             })
                         })
                     {
-                        // Find the start of this hunk's change region
                         let abs_pos = scroll + 1 + pos;
-                        // Walk back to find where this hunk starts
                         let mut hunk_start = abs_pos;
                         while hunk_start > 0 {
                             if let DisplayLine::Real(idx) = &collapsed_view[hunk_start - 1] {
@@ -442,7 +432,6 @@ fn run_tui(old_nix: &str, new_nix: &str, old_label: &str, new_label: &str) -> Re
                             }
                             break;
                         }
-                        // Only advance if this is a different hunk than current position
                         if hunk_start > scroll {
                             scroll = hunk_start;
                         } else {
@@ -457,7 +446,6 @@ fn run_tui(old_nix: &str, new_nix: &str, old_label: &str, new_label: &str) -> Re
             }
             KeyCode::Char('N') => {
                 if collapsed {
-                    // In collapsed mode, find previous change line
                     if scroll > 0 {
                         if let Some(pos) = collapsed_view[..scroll]
                             .iter()
@@ -468,7 +456,6 @@ fn run_tui(old_nix: &str, new_nix: &str, old_label: &str, new_label: &str) -> Re
                                 })
                             })
                         {
-                            // Walk back to start of this hunk
                             let mut hunk_start = pos;
                             while hunk_start > 0 {
                                 if let DisplayLine::Real(idx) = &collapsed_view[hunk_start - 1] {
