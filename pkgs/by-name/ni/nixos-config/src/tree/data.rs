@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use super::types::{ConfigNode, DepsIndex, DiffContext, DiffTag, Focus, MillerState};
+use super::types::{ConfigNode, DepsIndex, DiffContext, DiffFilter, DiffTag, Focus, MillerState};
 
 // ---------------------------------------------------------------------------
 // Tree building
@@ -442,13 +442,98 @@ pub(super) fn build_diff_context(
 
     diff_walk(old_root, new_root, &[], &mut tags, &mut old_values, &mut new_values, &old_deps, &new_deps);
 
+    // Build value-only tags (ignoring dep-only changes)
+    let mut value_tags = HashMap::new();
+    value_diff_walk(old_root, new_root, &[], &mut value_tags);
+
     DiffContext {
         tags,
+        value_tags,
         old_values,
         new_values,
         old_deps,
         new_deps,
-        hide_unchanged: true,
+        filter: DiffFilter::Changed,
+    }
+}
+
+/// Walk computing tags that only consider value changes (not deps).
+fn value_diff_walk(
+    old_children: &[(String, ConfigNode)],
+    new_children: &[(String, ConfigNode)],
+    prefix: &[String],
+    tags: &mut HashMap<String, DiffTag>,
+) {
+    let mut all_names: Vec<String> = Vec::new();
+    for (name, _) in old_children.iter().chain(new_children.iter()) {
+        if !all_names.contains(name) {
+            all_names.push(name.clone());
+        }
+    }
+
+    for name in &all_names {
+        let mut path = prefix.to_vec();
+        path.push(name.clone());
+        let dot_path = path.join(".");
+
+        let old_entry = old_children.iter().find(|(n, _)| n == name);
+        let new_entry = new_children.iter().find(|(n, _)| n == name);
+
+        match (old_entry, new_entry) {
+            (None, Some((_, new_node))) => {
+                tags.insert(dot_path.clone(), DiffTag::Added);
+                tag_all_descendants_simple(new_node, &path, DiffTag::Added, tags);
+            }
+            (Some((_, old_node)), None) => {
+                tags.insert(dot_path.clone(), DiffTag::Removed);
+                tag_all_descendants_simple(old_node, &path, DiffTag::Removed, tags);
+            }
+            (Some((_, old_node)), Some((_, new_node))) => {
+                match (old_node, new_node) {
+                    (ConfigNode::Branch(old_ch), ConfigNode::Branch(new_ch)) => {
+                        value_diff_walk(old_ch, new_ch, &path, tags);
+                        let has_changes = tags.iter().any(|(k, v)| {
+                            k.starts_with(&dot_path) && k != &dot_path && *v != DiffTag::Unchanged
+                        });
+                        tags.insert(dot_path, if has_changes { DiffTag::Modified } else { DiffTag::Unchanged });
+                    }
+                    (ConfigNode::Leaf(old_val), ConfigNode::Leaf(new_val)) => {
+                        // Only value equality matters here, NOT deps
+                        if old_val == new_val {
+                            tags.insert(dot_path, DiffTag::Unchanged);
+                        } else {
+                            tags.insert(dot_path, DiffTag::Modified);
+                        }
+                    }
+                    (ConfigNode::Phantom, ConfigNode::Phantom) => {
+                        // Phantoms have no value, so they're unchanged in value-only mode
+                        tags.insert(dot_path, DiffTag::Unchanged);
+                    }
+                    _ => {
+                        // Mixed types = Modified
+                        tags.insert(dot_path, DiffTag::Modified);
+                    }
+                }
+            }
+            (None, None) => unreachable!(),
+        }
+    }
+}
+
+fn tag_all_descendants_simple(
+    node: &ConfigNode,
+    path: &[String],
+    tag: DiffTag,
+    tags: &mut HashMap<String, DiffTag>,
+) {
+    if let ConfigNode::Branch(children) = node {
+        for (name, child) in children {
+            let mut child_path = path.to_vec();
+            child_path.push(name.clone());
+            let dot_path = child_path.join(".");
+            tags.insert(dot_path, tag);
+            tag_all_descendants_simple(child, &child_path, tag, tags);
+        }
     }
 }
 
@@ -575,9 +660,10 @@ fn deps_match(old_deps: &DepsIndex, new_deps: &DepsIndex, path: &str) -> bool {
 }
 
 /// Filter out unchanged nodes, keeping only changed nodes and their ancestors.
+/// Accepts a tag map so it can be called with either `tags` or `value_tags`.
 pub(super) fn filter_unchanged_tree(
     root: &[(String, ConfigNode)],
-    diff_ctx: &DiffContext,
+    tags: &HashMap<String, DiffTag>,
     prefix: &[String],
 ) -> Vec<(String, ConfigNode)> {
     let mut result = Vec::new();
@@ -585,11 +671,11 @@ pub(super) fn filter_unchanged_tree(
         let mut path = prefix.to_vec();
         path.push(name.clone());
         let dot_path = path.join(".");
-        let tag = diff_ctx.tags.get(&dot_path).copied().unwrap_or(DiffTag::Unchanged);
+        let tag = tags.get(&dot_path).copied().unwrap_or(DiffTag::Unchanged);
 
         match node {
             ConfigNode::Branch(children) => {
-                let filtered = filter_unchanged_tree(children, diff_ctx, &path);
+                let filtered = filter_unchanged_tree(children, tags, &path);
                 if !filtered.is_empty() {
                     result.push((name.clone(), ConfigNode::Branch(filtered)));
                 }

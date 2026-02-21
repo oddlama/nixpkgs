@@ -39,26 +39,25 @@ pub(super) fn render_pane_list<'a>(
         let is_cursor = cursor_idx == Some(i);
         let is_highlight = highlight_name == Some(name.as_str());
 
-        // Determine diff background
-        let diff_bg = if let Some(ctx) = diff_ctx {
-            match get_diff_tag(ctx, path_prefix, name, node) {
-                DiffTag::Removed => Some(DIFF_DELETE_BG),
-                DiffTag::Added => Some(DIFF_INSERT_BG),
-                DiffTag::Modified => Some(DIFF_MODIFIED_BG),
-                DiffTag::Unchanged => None,
-            }
-        } else {
-            None
-        };
+        // Determine diff tag
+        let diff_tag = diff_ctx.map(|ctx| get_diff_tag(ctx, path_prefix, name, node));
 
         let bg = if is_cursor {
-            CURSOR_BG
+            match diff_tag {
+                Some(DiffTag::Removed) => DIFF_DELETE_CURSOR_BG,
+                Some(DiffTag::Added) => DIFF_INSERT_CURSOR_BG,
+                Some(DiffTag::Modified) => DIFF_MODIFIED_CURSOR_BG,
+                _ => CURSOR_BG,
+            }
         } else if is_highlight {
             PARENT_HIGHLIGHT_BG
-        } else if let Some(dbg) = diff_bg {
-            dbg
         } else {
-            Color::Reset
+            match diff_tag {
+                Some(DiffTag::Removed) => DIFF_DELETE_BG,
+                Some(DiffTag::Added) => DIFF_INSERT_BG,
+                Some(DiffTag::Modified) => DIFF_MODIFIED_BG,
+                _ => Color::Reset,
+            }
         };
 
         let name_mod = if is_cursor || is_highlight || is_branch {
@@ -139,25 +138,28 @@ pub(super) fn render_search_result_line<'a>(
     let (icon, icon_color) = node.map(node_icon).unwrap_or(("?", COMMENT));
     let leaf_color = node.map(node_name_color).unwrap_or(FG);
 
-    // Determine diff background for search results
-    let diff_bg = if let Some(ctx) = diff_ctx {
+    // Determine diff tag for search results
+    let diff_tag = if let Some(ctx) = diff_ctx {
         let dot_path = path.join(".");
-        match ctx.tags.get(&dot_path).copied().unwrap_or(DiffTag::Unchanged) {
-            DiffTag::Removed => Some(DIFF_DELETE_BG),
-            DiffTag::Added => Some(DIFF_INSERT_BG),
-            DiffTag::Modified => Some(DIFF_MODIFIED_BG),
-            DiffTag::Unchanged => None,
-        }
+        ctx.tags.get(&dot_path).copied()
     } else {
         None
     };
 
     let bg = if is_selected {
-        CURSOR_BG
-    } else if let Some(dbg) = diff_bg {
-        dbg
+        match diff_tag {
+            Some(DiffTag::Removed) => DIFF_DELETE_CURSOR_BG,
+            Some(DiffTag::Added) => DIFF_INSERT_CURSOR_BG,
+            Some(DiffTag::Modified) => DIFF_MODIFIED_CURSOR_BG,
+            _ => CURSOR_BG,
+        }
     } else {
-        Color::Reset
+        match diff_tag {
+            Some(DiffTag::Removed) => DIFF_DELETE_BG,
+            Some(DiffTag::Added) => DIFF_INSERT_BG,
+            Some(DiffTag::Modified) => DIFF_MODIFIED_BG,
+            _ => Color::Reset,
+        }
     };
 
     let display = path.join(".");
@@ -541,22 +543,23 @@ pub(super) fn render_dep_list<'a>(
         let dep = &items[i];
         let is_selected = cursor == Some(i);
 
-        // Determine diff background for deps
-        let diff_bg = diff_dep_tags
-            .and_then(|tags| tags.get(i))
-            .and_then(|tag| match tag {
-                DiffTag::Removed => Some(DIFF_DELETE_BG),
-                DiffTag::Added => Some(DIFF_INSERT_BG),
-                DiffTag::Modified => Some(DIFF_MODIFIED_BG),
-                _ => None,
-            });
+        // Determine diff tag for deps
+        let diff_tag = diff_dep_tags.and_then(|tags| tags.get(i).copied());
 
         let bg = if is_selected {
-            CURSOR_BG
-        } else if let Some(dbg) = diff_bg {
-            dbg
+            match diff_tag {
+                Some(DiffTag::Removed) => DIFF_DELETE_CURSOR_BG,
+                Some(DiffTag::Added) => DIFF_INSERT_CURSOR_BG,
+                Some(DiffTag::Modified) => DIFF_MODIFIED_CURSOR_BG,
+                _ => CURSOR_BG,
+            }
         } else {
-            Color::Reset
+            match diff_tag {
+                Some(DiffTag::Removed) => DIFF_DELETE_BG,
+                Some(DiffTag::Added) => DIFF_INSERT_BG,
+                Some(DiffTag::Modified) => DIFF_MODIFIED_BG,
+                _ => Color::Reset,
+            }
         };
 
         let path_parts: Vec<String> = dep.split('.').map(|s| s.to_string()).collect();
@@ -701,6 +704,7 @@ pub(super) const HELP_LINES: &[(&str, &str)] = &[
     ("PageDown / PageUp", "Page scroll"),
     ("", ""),
     ("Info Panes", ""),
+    ("Tab", "Cycle through panes"),
     ("b", "Focus Browse pane"),
     ("d", "Focus Detail pane"),
     ("p", "Focus Dependencies pane"),
@@ -730,6 +734,9 @@ pub(super) const HELP_LINES: &[(&str, &str)] = &[
 pub(super) const DIFF_HELP_LINES: &[(&str, &str)] = &[
     ("", ""),
     ("Tree Diff", ""),
-    ("u", "Toggle show/hide unchanged"),
+    ("t", "Cycle filter: all / changed / value changed"),
     ("Enter on modified leaf", "Side-by-side diff pager"),
+    ("", ""),
+    ("Panel Navigation", ""),
+    ("Tab", "Cycle focus: Browse \u{2192} Detail \u{2192} Deps \u{2192} Revs"),
 ];

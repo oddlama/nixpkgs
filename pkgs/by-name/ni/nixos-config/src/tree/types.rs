@@ -86,13 +86,43 @@ pub(super) enum DiffTag {
     Unchanged,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum DiffFilter {
+    /// Show all entries (unchanged included)
+    All,
+    /// Hide unchanged entries (value or deps changed)
+    Changed,
+    /// Hide entries where only deps changed (only show actual value changes)
+    ValueChanged,
+}
+
+impl DiffFilter {
+    pub(super) fn next(self) -> Self {
+        match self {
+            DiffFilter::All => DiffFilter::Changed,
+            DiffFilter::Changed => DiffFilter::ValueChanged,
+            DiffFilter::ValueChanged => DiffFilter::All,
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            DiffFilter::All => "all",
+            DiffFilter::Changed => "changed",
+            DiffFilter::ValueChanged => "value changed",
+        }
+    }
+}
+
 pub(super) struct DiffContext {
     pub tags: HashMap<String, DiffTag>,
+    /// Tags that only consider value changes (ignoring dep-only changes)
+    pub value_tags: HashMap<String, DiffTag>,
     pub old_values: HashMap<String, Value>,
     pub new_values: HashMap<String, Value>,
     pub old_deps: DepsIndex,
     pub new_deps: DepsIndex,
-    pub hide_unchanged: bool,
+    pub filter: DiffFilter,
 }
 
 pub(super) fn rect_contains(r: Rect, col: u16, row: u16) -> bool {

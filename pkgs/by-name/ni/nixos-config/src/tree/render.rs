@@ -329,22 +329,61 @@ pub(super) fn render_frame(
             let path_str = selected_info
                 .map(|(rp, _)| rp.join("."))
                 .unwrap_or_default();
-            let dep_items: Vec<String> = deps_index
+            let all_dep_items: Vec<String> = deps_index
                 .dependencies
                 .get(&path_str)
                 .cloned()
                 .unwrap_or_default();
-            let rev_items: Vec<String> = deps_index
+            let all_rev_items: Vec<String> = deps_index
                 .dependents
                 .get(&path_str)
                 .cloned()
                 .unwrap_or_default();
-            let dep_count = dep_items.len();
-            let rev_count = rev_items.len();
 
             let s_detail_active = *right_focus == Focus::Detail;
             let s_deps_active = *right_focus == Focus::Deps;
             let s_revs_active = *right_focus == Focus::Revs;
+
+            // Compute diff tags and filter in diff modes
+            let s_should_filter = diff_ctx.map(|ctx| ctx.filter != DiffFilter::All).unwrap_or(false);
+            let (dep_items, dep_diff_tags) = if let Some(ctx) = diff_ctx {
+                let tags = compute_dep_diff_tags(
+                    &all_dep_items,
+                    ctx.old_deps.dependencies.get(&path_str),
+                    ctx.new_deps.dependencies.get(&path_str),
+                );
+                if s_should_filter {
+                    let (fi, ft): (Vec<_>, Vec<_>) = all_dep_items.into_iter()
+                        .zip(tags.into_iter())
+                        .filter(|(_, t)| *t != DiffTag::Unchanged)
+                        .unzip();
+                    (fi, Some(ft))
+                } else {
+                    (all_dep_items, Some(tags))
+                }
+            } else {
+                (all_dep_items, None)
+            };
+            let (rev_items, rev_diff_tags) = if let Some(ctx) = diff_ctx {
+                let tags = compute_dep_diff_tags(
+                    &all_rev_items,
+                    ctx.old_deps.dependents.get(&path_str),
+                    ctx.new_deps.dependents.get(&path_str),
+                );
+                if s_should_filter {
+                    let (fi, ft): (Vec<_>, Vec<_>) = all_rev_items.into_iter()
+                        .zip(tags.into_iter())
+                        .filter(|(_, t)| *t != DiffTag::Unchanged)
+                        .unzip();
+                    (fi, Some(ft))
+                } else {
+                    (all_rev_items, Some(tags))
+                }
+            } else {
+                (all_rev_items, None)
+            };
+            let dep_count = dep_items.len();
+            let rev_count = rev_items.len();
 
             // Detail pane
             let detail_block = make_block_keyed("Detail", None, 'd', s_detail_active);
@@ -375,13 +414,6 @@ pub(super) fn render_frame(
             } else {
                 (None, 0)
             };
-            let dep_diff_tags = diff_ctx.map(|ctx| {
-                compute_dep_diff_tags(
-                    &dep_items,
-                    ctx.old_deps.dependencies.get(&path_str),
-                    ctx.new_deps.dependencies.get(&path_str),
-                )
-            });
             let deps_lines = render_dep_list(
                 &dep_items, deps_cursor_val, deps_scroll_val, deps_height,
                 deps_inner.width, root_children,
@@ -402,13 +434,6 @@ pub(super) fn render_frame(
             } else {
                 (None, 0)
             };
-            let rev_diff_tags = diff_ctx.map(|ctx| {
-                compute_dep_diff_tags(
-                    &rev_items,
-                    ctx.old_deps.dependents.get(&path_str),
-                    ctx.new_deps.dependents.get(&path_str),
-                )
-            });
             let rev_lines = render_dep_list(
                 &rev_items, revs_cursor_val, revs_scroll_val, rev_height,
                 rev_inner.width, root_children,
@@ -659,38 +684,61 @@ pub(super) fn render_frame(
             };
             let path_str = full_path.join(".");
 
-            let dep_items: Vec<String> = deps_index
+            let all_dep_items: Vec<String> = deps_index
                 .dependencies
                 .get(&path_str)
                 .cloned()
                 .unwrap_or_default();
-            let rev_items: Vec<String> = deps_index
+            let all_rev_items: Vec<String> = deps_index
                 .dependents
                 .get(&path_str)
                 .cloned()
                 .unwrap_or_default();
-            let dep_count = dep_items.len();
-            let rev_count = rev_items.len();
 
             let detail_active = state.focus == Focus::Detail;
             let deps_active = state.focus == Focus::Deps;
             let revs_active = state.focus == Focus::Revs;
 
-            // Compute diff tags for deps/revs
-            let dep_diff_tags = diff_ctx.map(|ctx| {
-                compute_dep_diff_tags(
-                    &dep_items,
+            // Compute diff tags for deps/revs, filtering in diff modes
+            let should_filter_deps = diff_ctx.map(|ctx| ctx.filter != DiffFilter::All).unwrap_or(false);
+            let (dep_items, dep_diff_tags) = if let Some(ctx) = diff_ctx {
+                let tags = compute_dep_diff_tags(
+                    &all_dep_items,
                     ctx.old_deps.dependencies.get(&path_str),
                     ctx.new_deps.dependencies.get(&path_str),
-                )
-            });
-            let rev_diff_tags = diff_ctx.map(|ctx| {
-                compute_dep_diff_tags(
-                    &rev_items,
+                );
+                if should_filter_deps {
+                    let (fi, ft): (Vec<_>, Vec<_>) = all_dep_items.into_iter()
+                        .zip(tags.into_iter())
+                        .filter(|(_, t)| *t != DiffTag::Unchanged)
+                        .unzip();
+                    (fi, Some(ft))
+                } else {
+                    (all_dep_items, Some(tags))
+                }
+            } else {
+                (all_dep_items, None)
+            };
+            let (rev_items, rev_diff_tags) = if let Some(ctx) = diff_ctx {
+                let tags = compute_dep_diff_tags(
+                    &all_rev_items,
                     ctx.old_deps.dependents.get(&path_str),
                     ctx.new_deps.dependents.get(&path_str),
-                )
-            });
+                );
+                if should_filter_deps {
+                    let (fi, ft): (Vec<_>, Vec<_>) = all_rev_items.into_iter()
+                        .zip(tags.into_iter())
+                        .filter(|(_, t)| *t != DiffTag::Unchanged)
+                        .unzip();
+                    (fi, Some(ft))
+                } else {
+                    (all_rev_items, Some(tags))
+                }
+            } else {
+                (all_rev_items, None)
+            };
+            let dep_count = dep_items.len();
+            let rev_count = rev_items.len();
 
             let narrow = screen_width < 110;
 
@@ -855,9 +903,11 @@ pub(super) fn render_frame(
                 let mut spans = vec![Span::raw(" ")];
                 spans.extend(footer_pill("\u{2191}\u{2193}", "move"));
                 spans.extend(footer_pill("\u{2190}\u{2192}", "in/out"));
+                spans.extend(footer_pill("Tab", "panes"));
                 spans.extend(footer_pill("/", "search"));
-                if diff_ctx.is_some() {
-                    spans.extend(footer_pill("u", "unchanged"));
+                if let Some(ctx) = diff_ctx {
+                    let label = format!("filter: {}", ctx.filter.label());
+                    spans.extend(footer_pill("t", &label));
                 }
                 spans.extend(footer_pill("?", "help"));
                 spans.extend(footer_pill("q", "quit"));

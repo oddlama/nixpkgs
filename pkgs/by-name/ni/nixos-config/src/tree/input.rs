@@ -657,8 +657,11 @@ pub(super) fn handle_input(
                             deps_scroll: 0,
                         };
                     }
-                    KeyCode::Char('u') if diff_ctx.is_some() => {
+                    KeyCode::Char('t') if diff_ctx.is_some() => {
                         return Ok(InputAction::ToggleUnchanged);
+                    }
+                    KeyCode::Tab => {
+                        state.focus = Focus::Detail;
                     }
                     KeyCode::Char('?') => {
                         *mode = Mode::Help;
@@ -689,7 +692,7 @@ pub(super) fn handle_input(
                     | KeyCode::Char('b') => {
                         state.focus = Focus::Middle;
                     }
-                    KeyCode::Char('p') => {
+                    KeyCode::Char('p') | KeyCode::Tab => {
                         state.focus = Focus::Deps;
                         state.deps_cursor = 0;
                         state.deps_scroll = 0;
@@ -758,7 +761,7 @@ pub(super) fn handle_input(
                         KeyCode::Char('d') => {
                             state.focus = Focus::Detail;
                         }
-                        KeyCode::Char('n') => {
+                        KeyCode::Char('n') | KeyCode::Tab => {
                             state.focus = Focus::Revs;
                             state.deps_cursor = 0;
                             state.deps_scroll = 0;
@@ -827,6 +830,9 @@ pub(super) fn handle_input(
                             state.focus = Focus::Deps;
                             state.deps_cursor = 0;
                             state.deps_scroll = 0;
+                        }
+                        KeyCode::Tab => {
+                            state.focus = Focus::Middle;
                         }
                         _ => {}
                     }

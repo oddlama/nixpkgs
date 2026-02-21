@@ -46,6 +46,10 @@ pub const DESC_FG: Color = Color::Rgb(0x21, 0x25, 0x2b);
 pub const DIFF_DELETE_BG: Color = Color::Rgb(80, 0, 0);
 pub const DIFF_INSERT_BG: Color = Color::Rgb(0, 60, 0);
 pub const DIFF_MODIFIED_BG: Color = Color::Rgb(0, 30, 80);
+// Brighter variants for cursor selection in diff mode
+pub const DIFF_DELETE_CURSOR_BG: Color = Color::Rgb(130, 20, 20);
+pub const DIFF_INSERT_CURSOR_BG: Color = Color::Rgb(20, 100, 20);
+pub const DIFF_MODIFIED_CURSOR_BG: Color = Color::Rgb(20, 50, 130);
 
 // ---------------------------------------------------------------------------
 // Widget helpers

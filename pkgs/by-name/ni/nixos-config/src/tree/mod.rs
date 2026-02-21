@@ -32,7 +32,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
     let deps_index = build_deps_index(&combined.filtered_deps);
     insert_phantom_nodes(&mut root_children, &deps_index);
 
-    run_inner(&root_children, &root_children, &deps_index, config, None)
+    run_inner(&root_children, &root_children, &root_children, &deps_index, config, None)
 }
 
 pub fn run_diff(
@@ -69,16 +69,18 @@ pub fn run_diff(
     // Build diff context
     let diff_ctx = build_diff_context(&old_root, &new_root, old_deps, new_deps);
 
-    // Build filtered tree (only changed nodes)
-    let filtered_tree = filter_unchanged_tree(&union_tree, &diff_ctx, &[]);
+    // Build filtered trees (only changed nodes)
+    let filtered_tree = filter_unchanged_tree(&union_tree, &diff_ctx.tags, &[]);
+    let value_filtered_tree = filter_unchanged_tree(&union_tree, &diff_ctx.value_tags, &[]);
 
     let label = format!("{} -> {}", old_arg, new_arg);
-    run_inner(&union_tree, &filtered_tree, &merged_deps, &label, Some(diff_ctx))
+    run_inner(&union_tree, &filtered_tree, &value_filtered_tree, &merged_deps, &label, Some(diff_ctx))
 }
 
 fn run_inner(
     full_root: &[(String, ConfigNode)],
     filtered_root: &[(String, ConfigNode)],
+    value_filtered_root: &[(String, ConfigNode)],
     deps_index: &DepsIndex,
     config: &str,
     mut diff_ctx: Option<DiffContext>,
@@ -101,8 +103,11 @@ fn run_inner(
     let mut terminal = tui::setup()?;
 
     loop {
-        let hide = diff_ctx.as_ref().map(|c| c.hide_unchanged).unwrap_or(false);
-        let active_root = if hide { filtered_root } else { full_root };
+        let active_root = match diff_ctx.as_ref().map(|c| c.filter) {
+            Some(DiffFilter::Changed) => filtered_root,
+            Some(DiffFilter::ValueChanged) => value_filtered_root,
+            _ => full_root,
+        };
 
         let middle_children = get_children_at_path(active_root, &state.path);
         let middle_count = middle_children.map(|c| c.len()).unwrap_or(0);
@@ -146,9 +151,8 @@ fn run_inner(
             InputAction::Continue => {}
             InputAction::ToggleUnchanged => {
                 if let Some(ref mut ctx) = diff_ctx {
-                    ctx.hide_unchanged = !ctx.hide_unchanged;
-                    let label = if ctx.hide_unchanged { "Hiding" } else { "Showing" };
-                    status_msg = Some(format!("{} unchanged entries", label));
+                    ctx.filter = ctx.filter.next();
+                    status_msg = Some(format!("Filter: {}", ctx.filter.label()));
                     // Reset navigation
                     state.path.clear();
                     state.cursor = 0;
