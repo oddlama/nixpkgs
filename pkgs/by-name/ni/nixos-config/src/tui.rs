@@ -2,7 +2,7 @@ use std::io::{self, Stdout};
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -11,11 +11,16 @@ use ratatui::Terminal;
 
 pub type Term = Terminal<CrosstermBackend<Stdout>>;
 
+pub enum InputEvent {
+    Key(KeyEvent),
+    Mouse(MouseEvent),
+}
+
 /// Set up the terminal for TUI mode.
 pub fn setup() -> Result<Term> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
     Ok(terminal)
@@ -24,7 +29,7 @@ pub fn setup() -> Result<Term> {
 /// Restore the terminal to normal mode.
 pub fn teardown(mut terminal: Term) -> Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
     Ok(())
 }
@@ -34,6 +39,17 @@ pub fn read_key() -> Result<KeyEvent> {
     loop {
         if let Event::Key(key) = event::read()? {
             return Ok(key);
+        }
+    }
+}
+
+/// Read the next key or mouse event, blocking.
+pub fn read_input() -> Result<InputEvent> {
+    loop {
+        match event::read()? {
+            Event::Key(key) => return Ok(InputEvent::Key(key)),
+            Event::Mouse(mouse) => return Ok(InputEvent::Mouse(mouse)),
+            _ => {}
         }
     }
 }

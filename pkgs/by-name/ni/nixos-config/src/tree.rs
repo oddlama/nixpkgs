@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, MouseEventKind, MouseButton};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -18,6 +18,8 @@ use crate::tui;
 enum ConfigNode {
     Branch(Vec<(String, ConfigNode)>),
     Leaf(Value),
+    /// A node that appears in the dependency graph but has no serializable value.
+    Phantom,
 }
 
 struct DepsIndex {
@@ -63,6 +65,39 @@ enum Mode {
         scroll: usize,
         color: Color,
     },
+}
+
+fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
+    col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
+}
+
+/// Remembered inner areas for mouse hit-testing.
+#[derive(Default)]
+struct PaneAreas {
+    // Normal mode
+    parent_inner: Rect,
+    browse_inner: Rect,
+    children_inner: Rect,
+    detail_inner: Rect,
+    deps_inner: Rect,
+    revs_inner: Rect,
+    // Scroll offsets needed to convert row → item index
+    browse_scroll: usize,
+    deps_scroll: usize,
+    // Normal mode: counts for bounds-checking
+    browse_count: usize,
+    deps_count: usize,
+    revs_count: usize,
+    // Search mode
+    search_results_inner: Rect,
+    search_results_scroll: usize,
+    search_results_count: usize,
+    search_detail_inner: Rect,
+    search_deps_inner: Rect,
+    search_revs_inner: Rect,
+    search_deps_count: usize,
+    search_revs_count: usize,
+    search_deps_scroll: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -125,10 +160,13 @@ const ICON_ARRAY: &str = "\u{f03a}";     // nf-fa-list
 const ICON_ARRAY_COLOR: Color = YELLOW;
 const ICON_OBJECT: &str = "\u{f1b2}";    // nf-fa-cube
 const ICON_OBJECT_COLOR: Color = COMMENT;
+const ICON_PHANTOM: &str = "\u{f06a}";   // nf-fa-exclamation_circle
+const ICON_PHANTOM_COLOR: Color = YELLOW;
 
 fn node_icon(node: &ConfigNode) -> (&'static str, Color) {
     match node {
         ConfigNode::Branch(_) => (ICON_BRANCH, ICON_BRANCH_COLOR),
+        ConfigNode::Phantom => (ICON_PHANTOM, ICON_PHANTOM_COLOR),
         ConfigNode::Leaf(val) => match val {
             Value::Bool(_) => (ICON_BOOL, ICON_BOOL_COLOR),
             Value::String(_) => (ICON_STRING, ICON_STRING_COLOR),
@@ -141,12 +179,13 @@ fn node_icon(node: &ConfigNode) -> (&'static str, Color) {
 }
 
 // ---------------------------------------------------------------------------
-// Type-based colors (replaces section colors)
+// Type-based colors
 // ---------------------------------------------------------------------------
 
 fn node_name_color(node: &ConfigNode) -> Color {
     match node {
         ConfigNode::Branch(_) => BLUE,
+        ConfigNode::Phantom => YELLOW,
         ConfigNode::Leaf(val) => match val {
             Value::Bool(_) => CYAN,
             Value::String(_) => GREEN,
@@ -206,7 +245,7 @@ fn get_children_at_path<'a>(
         let idx = current.iter().position(|(n, _)| n == segment)?;
         match &current[idx].1 {
             ConfigNode::Branch(children) => current = children,
-            ConfigNode::Leaf(_) => return None,
+            ConfigNode::Leaf(_) | ConfigNode::Phantom => return None,
         }
     }
     Some(current)
@@ -282,6 +321,95 @@ fn build_deps_index(deps_json: &Value) -> DepsIndex {
     }
 }
 
+/// Insert placeholder nodes for dependency paths not present in the config tree.
+///
+/// Some options (e.g. `assertions`) are not serializable, so they don't appear
+/// in configValues. But they may participate in the dependency graph. We add
+/// them as `Leaf(Null)` so they're navigable and their deps/revdeps are visible.
+fn insert_phantom_nodes(
+    root: &mut Vec<(String, ConfigNode)>,
+    deps_index: &DepsIndex,
+) {
+    use std::collections::HashSet;
+
+    // Collect every dot-path mentioned in the dependency graph
+    let mut all_paths: HashSet<&str> = HashSet::new();
+    for key in deps_index.dependencies.keys() {
+        all_paths.insert(key.as_str());
+    }
+    for key in deps_index.dependents.keys() {
+        all_paths.insert(key.as_str());
+    }
+    for vals in deps_index.dependencies.values() {
+        for v in vals {
+            all_paths.insert(v.as_str());
+        }
+    }
+    for vals in deps_index.dependents.values() {
+        for v in vals {
+            all_paths.insert(v.as_str());
+        }
+    }
+
+    for dot_path in all_paths {
+        let segments: Vec<&str> = dot_path.split('.').collect();
+        ensure_path_exists(root, &segments);
+    }
+
+    // Re-sort after insertions
+    sort_tree_recursive(root);
+}
+
+/// Walk down `segments`, creating Branch/Leaf nodes as needed.
+fn ensure_path_exists(root: &mut Vec<(String, ConfigNode)>, segments: &[&str]) {
+    if segments.is_empty() {
+        return;
+    }
+
+    let name = segments[0].to_string();
+    let rest = &segments[1..];
+
+    // Find or create the entry at this level
+    let pos = root.iter().position(|(n, _)| *n == name);
+    let idx = if let Some(i) = pos {
+        i
+    } else {
+        // Insert new node
+        if rest.is_empty() {
+            root.push((name, ConfigNode::Phantom));
+        } else {
+            root.push((name, ConfigNode::Branch(Vec::new())));
+        }
+        root.len() - 1
+    };
+
+    if rest.is_empty() {
+        return;
+    }
+
+    // Need to recurse into a branch — promote Leaf to Branch if necessary
+    match &mut root[idx].1 {
+        ConfigNode::Branch(children) => {
+            ensure_path_exists(children, rest);
+        }
+        ConfigNode::Leaf(_) | ConfigNode::Phantom => {
+            // This was a leaf/phantom but we need children below it — promote to branch
+            let mut children = Vec::new();
+            ensure_path_exists(&mut children, rest);
+            root[idx].1 = ConfigNode::Branch(children);
+        }
+    }
+}
+
+fn sort_tree_recursive(children: &mut [(String, ConfigNode)]) {
+    sort_branches_first(children);
+    for (_, node) in children.iter_mut() {
+        if let ConfigNode::Branch(ch) = node {
+            sort_tree_recursive(ch);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Value formatting
 // ---------------------------------------------------------------------------
@@ -300,8 +428,9 @@ fn format_value_short(value: &Value) -> String {
                 format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
             }
         }
+        Value::Array(arr) if arr.is_empty() => "[]".to_string(),
         Value::Array(arr) => format!("[{}]", arr.len()),
-        Value::Object(map) if map.is_empty() => "{ }".to_string(),
+        Value::Object(map) if map.is_empty() => "{}".to_string(),
         Value::Object(map) => format!("{{{}}}", map.len()),
     }
 }
@@ -565,7 +694,7 @@ fn render_pane_list<'a>(
 
         let suffix = match node {
             ConfigNode::Branch(ch) => {
-                let count_str = format!("{}", ch.len());
+                let count_str = format!("{{{}}}", ch.len());
                 (count_str, Style::default().fg(COMMENT).bg(bg))
             }
             ConfigNode::Leaf(val) => {
@@ -577,6 +706,9 @@ fn render_pane_list<'a>(
                     short
                 };
                 (short, Style::default().fg(value_color(val)).bg(bg))
+            }
+            ConfigNode::Phantom => {
+                ("!".to_string(), Style::default().fg(YELLOW).bg(bg))
             }
         };
 
@@ -780,6 +912,12 @@ fn render_detail_info<'a>(
                 Style::default().fg(COMMENT),
             )));
         }
+        ConfigNode::Phantom => {
+            content.push(Line::from(Span::styled(
+                "! (not serializable or value not used)",
+                Style::default().fg(YELLOW),
+            )));
+        }
     }
 
     let total = content.len();
@@ -797,8 +935,10 @@ fn render_dep_list<'a>(
     cursor: Option<usize>,
     scroll: usize,
     visible_height: usize,
+    inner_width: u16,
     root_children: &[(String, ConfigNode)],
 ) -> Vec<Line<'a>> {
+    let width = inner_width as usize;
     if items.is_empty() {
         let mut lines = vec![Line::from(Span::styled(
             "  (none)",
@@ -809,6 +949,9 @@ fn render_dep_list<'a>(
         }
         return lines;
     }
+
+    let icon_col = 2; // icon + space
+    let text_width = width.saturating_sub(icon_col);
 
     let end = items.len().min(scroll + visible_height);
     let mut lines = Vec::new();
@@ -834,19 +977,66 @@ fn render_dep_list<'a>(
             Modifier::empty()
         };
 
-        lines.push(Line::from(vec![
+        let suffix = match node {
+            Some(ConfigNode::Branch(ch)) => {
+                let count_str = format!("{{{}}}", ch.len());
+                (count_str, Style::default().fg(COMMENT).bg(bg))
+            }
+            Some(ConfigNode::Leaf(val)) => {
+                let short = format_value_short(val);
+                let max_suffix = text_width / 2;
+                let short = if max_suffix > 3 && short.len() > max_suffix {
+                    format!("{}...", &short[..max_suffix - 3])
+                } else {
+                    short
+                };
+                (short, Style::default().fg(value_color(val)).bg(bg))
+            }
+            Some(ConfigNode::Phantom) => {
+                ("!".to_string(), Style::default().fg(YELLOW).bg(bg))
+            }
+            None => (String::new(), Style::default().bg(bg)),
+        };
+
+        let name_display = if text_width > 4 && dep.len() + 1 + suffix.0.len() > text_width && dep.len() > 3 {
+            let max_name = text_width.saturating_sub(suffix.0.len() + 4);
+            if max_name > 3 {
+                format!("{}...", &dep[..max_name])
+            } else {
+                dep.clone()
+            }
+        } else {
+            dep.clone()
+        };
+
+        let name_len = name_display.len();
+        let suffix_len = suffix.0.len();
+        let padding = if suffix_len > 0 && name_len + suffix_len + 1 < text_width {
+            text_width - name_len - suffix_len
+        } else if suffix_len > 0 {
+            1
+        } else {
+            0
+        };
+
+        let mut spans = vec![
             Span::styled(
                 format!("{} ", icon),
                 Style::default().fg(icon_color).bg(bg),
             ),
             Span::styled(
-                dep.to_string(),
+                name_display,
                 Style::default()
                     .fg(name_color)
                     .bg(bg)
                     .add_modifier(name_mod),
             ),
-        ]));
+        ];
+        if suffix_len > 0 {
+            spans.push(Span::styled(" ".repeat(padding), Style::default().bg(bg)));
+            spans.push(Span::styled(suffix.0, suffix.1));
+        }
+        lines.push(Line::from(spans));
     }
 
     while lines.len() < visible_height {
@@ -862,7 +1052,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .constraints([
             Constraint::Percentage((100 - percent_y) / 2),
             Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Min(0),
         ])
         .split(area);
     Layout::default()
@@ -870,7 +1060,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .constraints([
             Constraint::Percentage((100 - percent_x) / 2),
             Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Min(0),
         ])
         .split(v[1])[1]
 }
@@ -889,6 +1079,9 @@ fn print_tree_text(children: &[(String, ConfigNode)], depth: usize) {
             }
             ConfigNode::Leaf(val) => {
                 println!("{}{} = {}", indent, name, format_value_short(val));
+            }
+            ConfigNode::Phantom => {
+                println!("{}{} = !", indent, name);
             }
         }
     }
@@ -960,7 +1153,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
     let combined = resolve::resolve_combined(config, explicit, nix_args)?;
     let json = combined.config_values;
 
-    let root_children: Vec<(String, ConfigNode)> = match &json {
+    let mut root_children: Vec<(String, ConfigNode)> = match &json {
         Value::Object(map) => {
             let mut children: Vec<(String, ConfigNode)> = map
                 .iter()
@@ -973,6 +1166,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
     };
 
     let deps_index = build_deps_index(&combined.filtered_deps);
+    insert_phantom_nodes(&mut root_children, &deps_index);
 
     let mut state = MillerState {
         path: Vec::new(),
@@ -987,6 +1181,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
 
     let mut mode = Mode::Normal;
     let mut status_msg: Option<String> = None;
+    let mut pane_areas = PaneAreas::default();
 
     let mut terminal = tui::setup()?;
 
@@ -1109,7 +1304,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                         .direction(Direction::Horizontal)
                         .constraints([
                             Constraint::Percentage(60),
-                            Constraint::Percentage(40),
+                            Constraint::Min(0),
                         ])
                         .split(outer[1]);
 
@@ -1147,7 +1342,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                         .constraints([
                             Constraint::Percentage(40),
                             Constraint::Percentage(30),
-                            Constraint::Percentage(30),
+                            Constraint::Min(0),
                         ])
                         .split(body[1]);
 
@@ -1211,7 +1406,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                         (None, 0)
                     };
                     let deps_lines =
-                        render_dep_list(&dep_items, deps_cursor_val, deps_scroll_val, deps_height, &root_children);
+                        render_dep_list(&dep_items, deps_cursor_val, deps_scroll_val, deps_height, deps_inner.width, &root_children);
                     frame.render_widget(deps_block, right_stack[1]);
                     frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
@@ -1228,9 +1423,19 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                         (None, 0)
                     };
                     let rev_lines =
-                        render_dep_list(&rev_items, revs_cursor_val, revs_scroll_val, rev_height, &root_children);
+                        render_dep_list(&rev_items, revs_cursor_val, revs_scroll_val, rev_height, rev_inner.width, &root_children);
                     frame.render_widget(rev_block, right_stack[2]);
                     frame.render_widget(Paragraph::new(rev_lines), rev_inner);
+
+                    pane_areas.search_results_inner = results_inner;
+                    pane_areas.search_results_scroll = sc;
+                    pane_areas.search_results_count = total;
+                    pane_areas.search_detail_inner = detail_inner;
+                    pane_areas.search_deps_inner = deps_inner;
+                    pane_areas.search_revs_inner = rev_inner;
+                    pane_areas.search_deps_count = dep_count;
+                    pane_areas.search_revs_count = rev_count;
+                    pane_areas.search_deps_scroll = *s_deps_scroll;
 
                     // Search bar
                     let search_active = *right_focus == Focus::Middle;
@@ -1286,7 +1491,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                         .constraints([
                             Constraint::Length(1),
                             Constraint::Percentage(60),
-                            Constraint::Percentage(40),
+                            Constraint::Min(0),
                             Constraint::Length(1),
                         ])
                         .split(size);
@@ -1353,7 +1558,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                         .constraints([
                             Constraint::Percentage(25),
                             Constraint::Percentage(50),
-                            Constraint::Percentage(25),
+                            Constraint::Min(0),
                         ])
                         .split(outer[1]);
 
@@ -1389,6 +1594,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                             vec![Line::from(""); left_height]
                         }
                     };
+                    pane_areas.parent_inner = left_inner;
                     frame.render_widget(left_block, top[0]);
                     frame.render_widget(Paragraph::new(left_lines), left_inner);
 
@@ -1417,6 +1623,9 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                     } else {
                         vec![Line::from(""); middle_height]
                     };
+                    pane_areas.browse_inner = middle_inner;
+                    pane_areas.browse_scroll = state.scroll;
+                    pane_areas.browse_count = middle_count;
                     frame.render_widget(middle_block, top[1]);
                     frame.render_widget(Paragraph::new(middle_lines), middle_inner);
 
@@ -1439,6 +1648,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                         } else {
                             vec![Line::from(""); children_height]
                         };
+                    pane_areas.children_inner = children_inner;
                     frame.render_widget(children_block, top[2]);
                     frame.render_widget(Paragraph::new(children_lines), children_inner);
 
@@ -1477,7 +1687,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                             .direction(Direction::Horizontal)
                             .constraints([
                                 Constraint::Percentage(50),
-                                Constraint::Percentage(50),
+                                Constraint::Min(0),
                             ])
                             .split(outer[2]);
 
@@ -1505,7 +1715,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                             .direction(Direction::Vertical)
                             .constraints([
                                 Constraint::Percentage(50),
-                                Constraint::Percentage(50),
+                                Constraint::Min(0),
                             ])
                             .split(bottom[1]);
 
@@ -1520,7 +1730,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                             None
                         };
                         let deps_lines =
-                            render_dep_list(&dep_items, deps_cursor_val, state.deps_scroll, deps_height, &root_children);
+                            render_dep_list(&dep_items, deps_cursor_val, state.deps_scroll, deps_height, deps_inner.width, &root_children);
                         frame.render_widget(deps_block, right_stack[0]);
                         frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
@@ -1535,9 +1745,16 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                             None
                         };
                         let rev_lines =
-                            render_dep_list(&rev_items, revs_cursor_val, state.deps_scroll, rev_height, &root_children);
+                            render_dep_list(&rev_items, revs_cursor_val, state.deps_scroll, rev_height, rev_inner.width, &root_children);
                         frame.render_widget(rev_block, right_stack[1]);
                         frame.render_widget(Paragraph::new(rev_lines), rev_inner);
+
+                        pane_areas.detail_inner = detail_inner;
+                        pane_areas.deps_inner = deps_inner;
+                        pane_areas.revs_inner = rev_inner;
+                        pane_areas.deps_scroll = state.deps_scroll;
+                        pane_areas.deps_count = dep_count;
+                        pane_areas.revs_count = rev_count;
                     } else {
                         // Wide: Detail (50%) | Dependencies (25%) | Dependents (25%)
                         let bottom = Layout::default()
@@ -1545,7 +1762,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                             .constraints([
                                 Constraint::Percentage(50),
                                 Constraint::Percentage(25),
-                                Constraint::Percentage(25),
+                                Constraint::Min(0),
                             ])
                             .split(outer[2]);
 
@@ -1579,7 +1796,7 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                             None
                         };
                         let deps_lines =
-                            render_dep_list(&dep_items, deps_cursor_val, state.deps_scroll, deps_height, &root_children);
+                            render_dep_list(&dep_items, deps_cursor_val, state.deps_scroll, deps_height, deps_inner.width, &root_children);
                         frame.render_widget(deps_block, bottom[1]);
                         frame.render_widget(Paragraph::new(deps_lines), deps_inner);
 
@@ -1594,9 +1811,16 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                             None
                         };
                         let rev_lines =
-                            render_dep_list(&rev_items, revs_cursor_val, state.deps_scroll, rev_height, &root_children);
+                            render_dep_list(&rev_items, revs_cursor_val, state.deps_scroll, rev_height, rev_inner.width, &root_children);
                         frame.render_widget(rev_block, bottom[2]);
                         frame.render_widget(Paragraph::new(rev_lines), rev_inner);
+
+                        pane_areas.detail_inner = detail_inner;
+                        pane_areas.deps_inner = deps_inner;
+                        pane_areas.revs_inner = rev_inner;
+                        pane_areas.deps_scroll = state.deps_scroll;
+                        pane_areas.deps_count = dep_count;
+                        pane_areas.revs_count = rev_count;
                     }
 
                     // ---- Footer ----
@@ -1687,7 +1911,307 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
         // Input handling
         // =====================================================================
 
-        let key = tui::read_key()?;
+        let input = tui::read_input()?;
+
+        // Handle mouse events
+        if let tui::InputEvent::Mouse(mouse) = &input {
+            let col = mouse.column;
+            let row = mouse.row;
+
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    match &mut mode {
+                        Mode::Normal | Mode::Help => {
+                            if matches!(mode, Mode::Help) {
+                                mode = Mode::Normal;
+                                continue;
+                            }
+                            // Browse pane: click to select item + focus
+                            if rect_contains(pane_areas.browse_inner, col, row) {
+                                let line = (row - pane_areas.browse_inner.y) as usize;
+                                let idx = pane_areas.browse_scroll + line;
+                                if idx < pane_areas.browse_count {
+                                    state.cursor = idx;
+                                    state.detail_scroll = 0;
+                                    state.deps_cursor = 0;
+                                    state.deps_scroll = 0;
+                                    state.focus = Focus::Middle;
+                                }
+                            }
+                            // Parent pane: click to go up
+                            else if rect_contains(pane_areas.parent_inner, col, row) && !state.path.is_empty() {
+                                state.path_memory.insert(
+                                    state.path.clone(),
+                                    (state.cursor, state.scroll),
+                                );
+                                state.path.pop();
+                                let (c, s) = state
+                                    .path_memory
+                                    .get(&state.path)
+                                    .copied()
+                                    .unwrap_or((0, 0));
+                                state.cursor = c;
+                                state.scroll = s;
+                                state.detail_scroll = 0;
+                                state.deps_cursor = 0;
+                                state.deps_scroll = 0;
+                                state.focus = Focus::Middle;
+                            }
+                            // Children pane: click to drill in
+                            else if rect_contains(pane_areas.children_inner, col, row) {
+                                // Drill into the currently selected branch
+                                if let Some(children) = get_children_at_path(&root_children, &state.path) {
+                                    if let Some((name, ConfigNode::Branch(ch))) = children.get(state.cursor) {
+                                        let line = (row - pane_areas.children_inner.y) as usize;
+                                        if line < ch.len() {
+                                            // First drill into the branch
+                                            state.path_memory.insert(
+                                                state.path.clone(),
+                                                (state.cursor, state.scroll),
+                                            );
+                                            state.path.push(name.clone());
+                                            // Then select the clicked child
+                                            state.cursor = line;
+                                            state.scroll = 0;
+                                            state.detail_scroll = 0;
+                                            state.deps_cursor = 0;
+                                            state.deps_scroll = 0;
+                                            state.focus = Focus::Middle;
+                                        }
+                                    }
+                                }
+                            }
+                            // Detail pane: click to focus
+                            else if rect_contains(pane_areas.detail_inner, col, row) {
+                                state.focus = Focus::Detail;
+                            }
+                            // Deps pane: click to focus + select item, or jump if already selected
+                            else if rect_contains(pane_areas.deps_inner, col, row) {
+                                let line = (row - pane_areas.deps_inner.y) as usize;
+                                let idx = pane_areas.deps_scroll + line;
+                                if idx < pane_areas.deps_count {
+                                    if state.focus == Focus::Deps && state.deps_cursor == idx {
+                                        // Already selected — jump
+                                        let full_path = current_full_path(&state, &root_children);
+                                        let path_str = full_path.join(".");
+                                        if let Some(items) = deps_index.dependencies.get(&path_str) {
+                                            if idx < items.len() {
+                                                let target: Vec<String> = items[idx].split('.').map(|s| s.to_string()).collect();
+                                                let msg = format!("Jumped to {}", target.join("."));
+                                                jump_to_path(&mut state, &target, &root_children);
+                                                status_msg = Some(msg);
+                                            }
+                                        }
+                                    } else {
+                                        state.deps_cursor = idx;
+                                    }
+                                }
+                                state.focus = Focus::Deps;
+                            }
+                            // Revs pane: click to focus + select item, or jump if already selected
+                            else if rect_contains(pane_areas.revs_inner, col, row) {
+                                let line = (row - pane_areas.revs_inner.y) as usize;
+                                let idx = pane_areas.deps_scroll + line;
+                                if idx < pane_areas.revs_count {
+                                    if state.focus == Focus::Revs && state.deps_cursor == idx {
+                                        // Already selected — jump
+                                        let full_path = current_full_path(&state, &root_children);
+                                        let path_str = full_path.join(".");
+                                        if let Some(items) = deps_index.dependents.get(&path_str) {
+                                            if idx < items.len() {
+                                                let target: Vec<String> = items[idx].split('.').map(|s| s.to_string()).collect();
+                                                let msg = format!("Jumped to {}", target.join("."));
+                                                jump_to_path(&mut state, &target, &root_children);
+                                                status_msg = Some(msg);
+                                            }
+                                        }
+                                    } else {
+                                        state.deps_cursor = idx;
+                                    }
+                                }
+                                state.focus = Focus::Revs;
+                            }
+                        }
+                        Mode::Search {
+                            cursor: s_cursor,
+                            results,
+                            right_focus,
+                            detail_scroll: s_detail_scroll,
+                            deps_cursor: s_deps_cursor,
+                            deps_scroll: s_deps_scroll,
+                            ..
+                        } => {
+                            // Results pane
+                            if rect_contains(pane_areas.search_results_inner, col, row) {
+                                let line = (row - pane_areas.search_results_inner.y) as usize;
+                                let idx = pane_areas.search_results_scroll + line;
+                                if idx < pane_areas.search_results_count {
+                                    *s_cursor = idx;
+                                    *s_detail_scroll = 0;
+                                    *s_deps_cursor = 0;
+                                    *s_deps_scroll = 0;
+                                }
+                                *right_focus = Focus::Middle;
+                            }
+                            // Detail pane
+                            else if rect_contains(pane_areas.search_detail_inner, col, row) {
+                                *right_focus = Focus::Detail;
+                            }
+                            // Deps pane: click to focus + select, or jump if already selected
+                            else if rect_contains(pane_areas.search_deps_inner, col, row) {
+                                let line = (row - pane_areas.search_deps_inner.y) as usize;
+                                let idx = pane_areas.search_deps_scroll + line;
+                                if idx < pane_areas.search_deps_count {
+                                    if *right_focus == Focus::Deps && *s_deps_cursor == idx {
+                                        // Already selected — jump
+                                        let path_str = if !results.is_empty() && *s_cursor < results.len() {
+                                            results[*s_cursor].join(".")
+                                        } else {
+                                            String::new()
+                                        };
+                                        if let Some(items) = deps_index.dependencies.get(&path_str) {
+                                            if idx < items.len() {
+                                                let target: Vec<String> = items[idx].split('.').map(|s| s.to_string()).collect();
+                                                let msg = format!("Jumped to {}", target.join("."));
+                                                mode = Mode::Normal;
+                                                jump_to_path(&mut state, &target, &root_children);
+                                                status_msg = Some(msg);
+                                            }
+                                        }
+                                    } else {
+                                        *s_deps_cursor = idx;
+                                    }
+                                }
+                                if let Mode::Search { right_focus, .. } = &mut mode {
+                                    *right_focus = Focus::Deps;
+                                }
+                            }
+                            // Revs pane: click to focus + select, or jump if already selected
+                            else if rect_contains(pane_areas.search_revs_inner, col, row) {
+                                let line = (row - pane_areas.search_revs_inner.y) as usize;
+                                let idx = pane_areas.search_deps_scroll + line;
+                                if idx < pane_areas.search_revs_count {
+                                    if *right_focus == Focus::Revs && *s_deps_cursor == idx {
+                                        // Already selected — jump
+                                        let path_str = if !results.is_empty() && *s_cursor < results.len() {
+                                            results[*s_cursor].join(".")
+                                        } else {
+                                            String::new()
+                                        };
+                                        if let Some(items) = deps_index.dependents.get(&path_str) {
+                                            if idx < items.len() {
+                                                let target: Vec<String> = items[idx].split('.').map(|s| s.to_string()).collect();
+                                                let msg = format!("Jumped to {}", target.join("."));
+                                                mode = Mode::Normal;
+                                                jump_to_path(&mut state, &target, &root_children);
+                                                status_msg = Some(msg);
+                                            }
+                                        }
+                                    } else {
+                                        *s_deps_cursor = idx;
+                                    }
+                                }
+                                if let Mode::Search { right_focus, .. } = &mut mode {
+                                    *right_focus = Focus::Revs;
+                                }
+                            }
+                        }
+                        Mode::Pager { .. } => {}
+                    }
+                    continue;
+                }
+                MouseEventKind::ScrollDown => {
+                    match &mut mode {
+                        Mode::Normal | Mode::Help => {
+                            if rect_contains(pane_areas.browse_inner, col, row) {
+                                if state.focus == Focus::Middle && middle_count > 0 && state.cursor + 1 < middle_count {
+                                    state.cursor += 1;
+                                    state.detail_scroll = 0;
+                                    state.deps_cursor = 0;
+                                    state.deps_scroll = 0;
+                                }
+                            } else if rect_contains(pane_areas.detail_inner, col, row) {
+                                state.detail_scroll += 1;
+                            } else if rect_contains(pane_areas.deps_inner, col, row) {
+                                let full_path = current_full_path(&state, &root_children);
+                                let path_str = full_path.join(".");
+                                let total = deps_index.dependencies.get(&path_str).map(|v| v.len()).unwrap_or(0);
+                                if total > 0 && state.deps_cursor + 1 < total {
+                                    state.deps_cursor += 1;
+                                }
+                            } else if rect_contains(pane_areas.revs_inner, col, row) {
+                                let full_path = current_full_path(&state, &root_children);
+                                let path_str = full_path.join(".");
+                                let total = deps_index.dependents.get(&path_str).map(|v| v.len()).unwrap_or(0);
+                                if total > 0 && state.deps_cursor + 1 < total {
+                                    state.deps_cursor += 1;
+                                }
+                            }
+                        }
+                        Mode::Search { cursor: s_cursor, results, deps_cursor: s_deps_cursor, right_focus, .. } => {
+                            if rect_contains(pane_areas.search_results_inner, col, row) {
+                                if !results.is_empty() && *s_cursor + 1 < results.len() {
+                                    *s_cursor += 1;
+                                }
+                            } else if rect_contains(pane_areas.search_deps_inner, col, row) && *right_focus == Focus::Deps {
+                                if pane_areas.search_deps_count > 0 && *s_deps_cursor + 1 < pane_areas.search_deps_count {
+                                    *s_deps_cursor += 1;
+                                }
+                            } else if rect_contains(pane_areas.search_revs_inner, col, row) && *right_focus == Focus::Revs {
+                                if pane_areas.search_revs_count > 0 && *s_deps_cursor + 1 < pane_areas.search_revs_count {
+                                    *s_deps_cursor += 1;
+                                }
+                            }
+                        }
+                        Mode::Pager { scroll: p_scroll, lines: pager_lines, .. } => {
+                            if *p_scroll + 1 < pager_lines.len() {
+                                *p_scroll += 1;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                MouseEventKind::ScrollUp => {
+                    match &mut mode {
+                        Mode::Normal | Mode::Help => {
+                            if rect_contains(pane_areas.browse_inner, col, row) {
+                                if state.cursor > 0 {
+                                    state.cursor -= 1;
+                                    state.detail_scroll = 0;
+                                    state.deps_cursor = 0;
+                                    state.deps_scroll = 0;
+                                }
+                            } else if rect_contains(pane_areas.detail_inner, col, row) {
+                                state.detail_scroll = state.detail_scroll.saturating_sub(1);
+                            } else if rect_contains(pane_areas.deps_inner, col, row) {
+                                state.deps_cursor = state.deps_cursor.saturating_sub(1);
+                            } else if rect_contains(pane_areas.revs_inner, col, row) {
+                                state.deps_cursor = state.deps_cursor.saturating_sub(1);
+                            }
+                        }
+                        Mode::Search { cursor: s_cursor, deps_cursor: s_deps_cursor, right_focus, .. } => {
+                            if rect_contains(pane_areas.search_results_inner, col, row) {
+                                *s_cursor = s_cursor.saturating_sub(1);
+                            } else if rect_contains(pane_areas.search_deps_inner, col, row) && *right_focus == Focus::Deps {
+                                *s_deps_cursor = s_deps_cursor.saturating_sub(1);
+                            } else if rect_contains(pane_areas.search_revs_inner, col, row) && *right_focus == Focus::Revs {
+                                *s_deps_cursor = s_deps_cursor.saturating_sub(1);
+                            }
+                        }
+                        Mode::Pager { scroll: p_scroll, .. } => {
+                            *p_scroll = p_scroll.saturating_sub(1);
+                        }
+                    }
+                    continue;
+                }
+                _ => { continue; }
+            }
+        }
+
+        let key = match input {
+            tui::InputEvent::Key(k) => k,
+            _ => continue,
+        };
 
         // Global Ctrl-C quit from any mode
         if key.code == KeyCode::Char('c')
@@ -1826,6 +2350,16 @@ pub fn run(config: &str, explicit: bool, use_color: bool, nix_args: &[String]) -
                                                 lines,
                                                 scroll: 0,
                                                 color,
+                                            };
+                                        }
+                                        ConfigNode::Phantom => {
+                                            let mut full = state.path.clone();
+                                            full.push(name.clone());
+                                            mode = Mode::Pager {
+                                                path: full,
+                                                lines: vec!["! (not serializable or value not used)".to_string()],
+                                                scroll: 0,
+                                                color: YELLOW,
                                             };
                                         }
                                     }
