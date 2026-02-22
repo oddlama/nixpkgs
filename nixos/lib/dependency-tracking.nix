@@ -320,10 +320,7 @@ let
   # 9. Config value serialization
   # =========================================================================
 
-  sanitizeValue = depth: value:
-    if depth <= 0 then
-      "<depth-limit>"
-    else
+  sanitizeValue = value:
       let t = builtins.typeOf value;
       in
       if t == "string" then
@@ -333,14 +330,12 @@ let
       else if t == "lambda" then
         "<function>"
       else if t == "list" then
-        map (sanitizeValue (depth - 1)) value
+        map sanitizeValue value
       else if t == "set" then
         if lib.isDerivation value then
           "<derivation:${value.name or "unknown"}>"
-        else if builtins.length (builtins.attrNames value) > 50 then
-          "<attrset:${toString (builtins.length (builtins.attrNames value))} attrs>"
         else
-          lib.mapAttrs (_: sanitizeValue (depth - 1)) value
+          lib.mapAttrs (_: sanitizeValue) value
       else
         value; # int, float, bool, null pass through
 
@@ -354,7 +349,7 @@ let
         let
           val = lib.attrByPath path _missing config;
         in
-        if val == _missing then _missing else sanitizeValue 5 val;
+        if val == _missing then _missing else sanitizeValue val;
       evalResult =
         if hasTryCatchAll
         then builtins.tryCatchAll doEval
