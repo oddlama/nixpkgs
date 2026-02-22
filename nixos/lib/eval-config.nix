@@ -151,7 +151,8 @@ let
           inherit (configuration._module.args) pkgs;
           toplevel = configuration.config.system.build.toplevel;
         };
-      in {
+      in
+      {
         dependencyTracking = tracking;
         # Override config so config.system.build.toplevel transparently
         # returns the wrapper that includes tracking.json.  The inner

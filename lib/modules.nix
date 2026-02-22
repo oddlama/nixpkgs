@@ -118,7 +118,8 @@ let
       trackingScopeId = if trackingEnabled then builtins.createTrackingScope else null;
 
       # Tag a value with its option path for dependency tracking
-      tagOptionValue = loc: value:
+      tagOptionValue =
+        loc: value:
         if trackingEnabled && builtins ? tagThunkOrigin then
           builtins.tagThunkOrigin trackingScopeId loc value
         else
@@ -133,16 +134,20 @@ let
       # a wrapper thunk (which would happen with { value = tagThunkOrigin ... })
       # that auto-registration would incorrectly tag with ["opt","path","value"]
       # instead of the correct ["opt","path"].
-      tagOptionsRecursive = pfx: opts:
-        mapAttrs (name: opt:
-          let loc = pfx ++ [ name ];
-          in if isOption opt
-             then
-               if trackingEnabled && builtins ? tagAttrThunkOrigin then
-                 builtins.tagAttrThunkOrigin trackingScopeId loc "value" opt
-               else
-                 opt
-             else tagOptionsRecursive loc opt
+      tagOptionsRecursive =
+        pfx: opts:
+        mapAttrs (
+          name: opt:
+          let
+            loc = pfx ++ [ name ];
+          in
+          if isOption opt then
+            if trackingEnabled && builtins ? tagAttrThunkOrigin then
+              builtins.tagAttrThunkOrigin trackingScopeId loc "value" opt
+            else
+              opt
+          else
+            tagOptionsRecursive loc opt
         ) opts;
 
       withWarnings =
@@ -319,12 +324,15 @@ let
       # Additionally, register options as a tracked attrset so that
       # accesses through the options tree (e.g., doRename accessing
       # options.old.path) generate dependency edges.
-      options = if trackingEnabled
-                then let
-                  taggedMatchedOptions = builtins.tagThunkOrigin trackingScopeId [] merged.matchedOptions;
-                  rawOptions = tagOptionsRecursive prefix taggedMatchedOptions;
-                in builtins.seq (builtins.registerTrackedAttrset trackingScopeId rawOptions) rawOptions
-                else merged.matchedOptions;
+      options =
+        if trackingEnabled then
+          let
+            taggedMatchedOptions = builtins.tagThunkOrigin trackingScopeId [ ] merged.matchedOptions;
+            rawOptions = tagOptionsRecursive prefix taggedMatchedOptions;
+          in
+          builtins.seq (builtins.registerTrackedAttrset trackingScopeId rawOptions) rawOptions
+        else
+          merged.matchedOptions;
 
       config =
         let
@@ -449,9 +457,7 @@ let
       # For tracking: register config before any options are evaluated.
       # This returns the scopeId (so it can be used to confirm registration happened).
       trackingRegistration =
-        if trackingEnabled
-        then builtins.registerTrackedAttrset trackingScopeId config
-        else null;
+        if trackingEnabled then builtins.registerTrackedAttrset trackingScopeId config else null;
 
       # The exposed config forces tracking registration first (if enabled).
       # This ensures the config attrset is tracked before any option access.
@@ -459,32 +465,39 @@ let
       # regardless of which config attrset is accessed (internal by modules,
       # exposed by external users).
       exposedConfig =
-        let rawExposed = removeAttrs config [ "_module" ];
-        in if trackingEnabled
-           then builtins.seq trackingRegistration
-                  (builtins.seq (builtins.registerTrackedAttrset trackingScopeId rawExposed) rawExposed)
-           else rawExposed;
+        let
+          rawExposed = removeAttrs config [ "_module" ];
+        in
+        if trackingEnabled then
+          builtins.seq trackingRegistration (
+            builtins.seq (builtins.registerTrackedAttrset trackingScopeId rawExposed) rawExposed
+          )
+        else
+          rawExposed;
 
-      result = withWarnings ({
-        _type = "configuration";
-        options = checked options;
-        config = checked exposedConfig;
-        _module = checked (config._module);
-        inherit (doCollect { }) graph;
-        inherit extendModules type class;
-      } // lib.optionalAttrs trackingEnabled {
-        # Dependency tracking interface.
-        # When trackDependencies is enabled and the required builtins are available,
-        # this provides functions to query option dependencies.
-        _dependencyTracking = {
-          # The raw config (internal, includes _module)
-          rawConfig = config;
-          # The scope ID for this evaluation
-          scopeId = trackingScopeId;
-          # Get all recorded dependencies after evaluation
-          getDependencies = builtins.getDependencies trackingScopeId;
-        };
-      });
+      result = withWarnings (
+        {
+          _type = "configuration";
+          options = checked options;
+          config = checked exposedConfig;
+          _module = checked (config._module);
+          inherit (doCollect { }) graph;
+          inherit extendModules type class;
+        }
+        // lib.optionalAttrs trackingEnabled {
+          # Dependency tracking interface.
+          # When trackDependencies is enabled and the required builtins are available,
+          # this provides functions to query option dependencies.
+          _dependencyTracking = {
+            # The raw config (internal, includes _module)
+            rawConfig = config;
+            # The scope ID for this evaluation
+            scopeId = trackingScopeId;
+            # Get all recorded dependencies after evaluation
+            getDependencies = builtins.getDependencies trackingScopeId;
+          };
+        }
+      );
     in
     result;
 
